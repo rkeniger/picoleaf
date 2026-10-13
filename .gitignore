@@ -2,6 +2,7 @@
 firmware/**/*.firmware
 
 pico/build/
+pico/build-*/
 .venv/
 __pycache__/
 

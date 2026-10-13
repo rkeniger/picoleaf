@@ -72,9 +72,9 @@ export PICO_SDK_PATH=/path/to/pico-sdk
 cmake -S pico -B pico/build -G Ninja && cmake --build pico/build
 ```
 
-CI also builds it on every push, as a workflow artifact.
+CI also builds it on every push, as a workflow artifact. The release and CI builds are for the Pico W. For a Pico 2 W, build it yourself in a separate directory: `cmake -S pico -B pico/build-pico2_w -G Ninja -DPICO_BOARD=pico2_w`. It drives a wall over USB, but Home Assistant hasn't been tried on it yet, and it has locked up once for a reason not yet found.
 
-**2. Flash it.** Hold BOOTSEL while plugging the Pico in, then drag the `.uf2` onto the `RPI-RP2` drive (or `picotool load -x canvas_probe.uf2`). Self-test it with nothing connected — [step 2](docs/prototype-v1.md#step-2--flash-and-self-test-the-pico-no-square-attached).
+**2. Flash it.** Hold BOOTSEL while plugging the Pico in, then drag the `.uf2` onto the `RPI-RP2` drive (`RP2350` on a Pico 2 W), or use `picotool load -x canvas_probe.uf2`. Self-test it with nothing connected — [step 2](docs/prototype-v1.md#step-2--flash-and-self-test-the-pico-no-square-attached).
 
 **3. Wire it up**, meter first: [step 1](docs/prototype-v1.md#step-1--identify-the-linker-contacts-multimeter) and [step 3](docs/prototype-v1.md#step-3--connect-and-listen). GND before DATA, PSU unplugged.
 

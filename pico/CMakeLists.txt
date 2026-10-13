@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 
-set(PICO_BOARD pico_w)
+# Pico W by default; -DPICO_BOARD=pico2_w builds for the Pico 2 W (use a fresh build directory).
+set(PICO_BOARD pico_w CACHE STRING "Board type")
 include(pico_sdk_import.cmake)
 
 project(canvas_probe C CXX ASM)
