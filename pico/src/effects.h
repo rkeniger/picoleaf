@@ -51,7 +51,8 @@ void effect_points_from_layout(const layout_position_t *positions, size_t count,
 void effect_memory_init(effect_memory_t *memory, uint32_t seed);
 
 // Colours for `count` squares at `now_us`. `base` supplies on/off, brightness and, for
-// Breathe, Twinkle, Colour wave and Ripple, the colour. EFFECT_SOLID renders `base` everywhere.
+// Breathe, Twinkle, Colour wave and Ripple, the colour including white. The other effects leave
+// the white LEDs off. EFFECT_SOLID renders `base` everywhere.
 void effect_render(effect_t effect, uint64_t now_us, const effect_point_t *points, size_t count,
                    const light_state_t *base, effect_memory_t *memory, uint8_t rgbw[][4]);
 

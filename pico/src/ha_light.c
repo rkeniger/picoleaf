@@ -33,6 +33,36 @@ static bool parse_byte(const char *cursor, const char *end, uint8_t *value) {
     return true;
 }
 
+// Parses a whole number at `cursor`, saturating at 65535.
+static bool parse_uint16(const char *cursor, const char *end, uint16_t *value) {
+    if (cursor == NULL || cursor >= end || *cursor < '0' || *cursor > '9') return false;
+    unsigned number = 0;
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        if (number < 65535) number = number * 10 + (unsigned)(*cursor - '0');
+        cursor++;
+    }
+    *value = number > 65535 ? 65535 : (uint16_t)number;
+    return true;
+}
+
+static const uint8_t COOL_RGBW[4] = {0x00, 0x00, 0x00, 0xFF};
+static const uint8_t WARM_RGBW[4] = {0x90, 0x30, 0x00, 0xFF};
+
+// Blends from the cool to the warm mix in mireds (1,000,000 / kelvin), which spaces colour
+// temperatures more evenly to the eye than kelvin does.
+static void mix_temperature(light_state_t *state, uint16_t kelvin) {
+    if (kelvin < LIGHT_WARM_KELVIN) kelvin = LIGHT_WARM_KELVIN;
+    if (kelvin > LIGHT_COOL_KELVIN) kelvin = LIGHT_COOL_KELVIN;
+    const uint32_t cool = 1000000u / LIGHT_COOL_KELVIN, warm = 1000000u / LIGHT_WARM_KELVIN;
+    uint32_t span = warm - cool, done = 1000000u / kelvin - cool;
+    uint8_t *channels[4] = {&state->red, &state->green, &state->blue, &state->white};
+    for (int channel = 0; channel < 4; channel++) {
+        *channels[channel] =
+            (uint8_t)((COOL_RGBW[channel] * (span - done) + WARM_RGBW[channel] * done + span / 2) / span);
+    }
+    state->kelvin = kelvin;
+}
+
 bool ha_light_apply_command(light_state_t *state, const char *payload, size_t length) {
     const char *end = payload + length;
     light_state_t updated = *state;
@@ -56,6 +86,14 @@ bool ha_light_apply_command(light_state_t *state, const char *payload, size_t le
         recognised = true;
     }
 
+    const char *temperature = find_value(payload, end, "color_temp");
+    if (temperature) {
+        uint16_t kelvin;
+        if (!parse_uint16(temperature, end, &kelvin) || kelvin == 0) return false;
+        mix_temperature(&updated, kelvin);
+        recognised = true;
+    }
+
     const char *colour = find_value(payload, end, "color");
     if (colour) {
         if (*colour != '{') return false;
@@ -66,6 +104,11 @@ bool ha_light_apply_command(light_state_t *state, const char *payload, size_t le
             !parse_byte(find_value(colour, colour_end, "b"), colour_end, &updated.blue)) {
             return false;
         }
+        // Home Assistant always sends "w" in RGBW mode; a plain RGB colour means no white.
+        const char *white = find_value(colour, colour_end, "w");
+        updated.white = 0;
+        if (white && !parse_byte(white, colour_end, &updated.white)) return false;
+        updated.kelvin = 0;
         recognised = true;
     }
 
@@ -109,11 +152,16 @@ static size_t checked_length(int written, size_t size) {
 }
 
 size_t ha_light_state_json(const light_state_t *state, const char *effect, char *out, size_t size) {
-    int written = snprintf(out, size,
-                           "{\"state\":\"%s\",\"brightness\":%u,\"color_mode\":\"rgb\",\"color\":{\"r\":%u,\"g\":%u,"
-                           "\"b\":%u}%s%s%s}",
-                           state->on ? "ON" : "OFF", state->brightness, state->red, state->green, state->blue,
-                           effect ? ",\"effect\":\"" : "", effect ? effect : "", effect ? "\"" : "");
+    char colour[80];
+    if (state->kelvin) {
+        snprintf(colour, sizeof colour, "\"color_mode\":\"color_temp\",\"color_temp\":%u", state->kelvin);
+    } else {
+        snprintf(colour, sizeof colour, "\"color_mode\":\"rgbw\",\"color\":{\"r\":%u,\"g\":%u,\"b\":%u,\"w\":%u}",
+                 state->red, state->green, state->blue, state->white);
+    }
+    int written = snprintf(out, size, "{\"state\":\"%s\",\"brightness\":%u,%s%s%s%s}", state->on ? "ON" : "OFF",
+                           state->brightness, colour, effect ? ",\"effect\":\"" : "", effect ? effect : "",
+                           effect ? "\"" : "");
     return checked_length(written, size);
 }
 
@@ -125,7 +173,7 @@ void ha_light_output(const light_state_t *state, uint8_t rgbw[4]) {
     rgbw[0] = state->on ? scale(state->red, state->brightness) : 0;
     rgbw[1] = state->on ? scale(state->green, state->brightness) : 0;
     rgbw[2] = state->on ? scale(state->blue, state->brightness) : 0;
-    rgbw[3] = 0;
+    rgbw[3] = state->on ? scale(state->white, state->brightness) : 0;
 }
 
 size_t ha_light_discovery_json(const ha_light_discovery_t *light, char *out, size_t size) {
@@ -143,11 +191,13 @@ size_t ha_light_discovery_json(const ha_light_discovery_t *light, char *out, siz
     int written = snprintf(out, size,
                            "{\"name\":\"%s\",\"unique_id\":\"%s\",\"schema\":\"json\",\"command_topic\":\"%s\","
                            "\"state_topic\":\"%s\",\"availability_topic\":\"%s\",\"brightness\":true,"
-                           "\"supported_color_modes\":[\"rgb\"]%s,\"device\":{\"identifiers\":[\"%s\"],"
+                           "\"supported_color_modes\":[\"color_temp\",\"rgbw\"],\"color_temp_kelvin\":true,"
+                           "\"min_kelvin\":%u,\"max_kelvin\":%u%s,\"device\":{\"identifiers\":[\"%s\"],"
                            "\"name\":\"Nanoleaf Canvas\",\"manufacturer\":\"picoleaf\","
                            "\"model\":\"Pico W panel controller\",\"sw_version\":\"%s\"}}",
                            light->name, light->unique_id, light->command_topic, light->state_topic,
-                           light->availability_topic, effects, light->device_id, light->firmware_version);
+                           light->availability_topic, LIGHT_WARM_KELVIN, LIGHT_COOL_KELVIN, effects,
+                           light->device_id, light->firmware_version);
     return checked_length(written, size);
 }
 

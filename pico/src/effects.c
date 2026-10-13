@@ -110,11 +110,8 @@ static void heat_to_rgb(float heat, float rgb[3]) {
     rgb[2] = clamp01((heat - 0.85f) * 3.0f) * 0.4f;
 }
 
-static void write(uint8_t rgbw[4], const float rgb[3], float brightness) {
-    rgbw[0] = to_byte(rgb[0] * brightness);
-    rgbw[1] = to_byte(rgb[1] * brightness);
-    rgbw[2] = to_byte(rgb[2] * brightness);
-    rgbw[3] = 0;
+static void write(uint8_t out[4], const float rgbw[4], float brightness) {
+    for (int channel = 0; channel < 4; channel++) out[channel] = to_byte(rgbw[channel] * brightness);
 }
 
 void effect_render(effect_t effect, uint64_t now_us, const effect_point_t *points, size_t count,
@@ -127,41 +124,41 @@ void effect_render(effect_t effect, uint64_t now_us, const effect_point_t *point
     memory->last_frame_us = now_us;
 
     float brightness = base->on ? (float)base->brightness / 255.0f : 0.0f;
-    const float colour[3] = {base->red / 255.0f, base->green / 255.0f, base->blue / 255.0f};
+    const float colour[4] = {base->red / 255.0f, base->green / 255.0f, base->blue / 255.0f, base->white / 255.0f};
 
     for (size_t i = 0; i < count; i++) {
-        float rgb[3], level;
+        float rgbw_level[4] = {0}, level;  // the white LEDs stay off unless the effect uses the wall's colour
         const effect_point_t *point = &points[i];
         switch (effect) {
             case EFFECT_COLOUR_CYCLE:
-                hue_to_rgb(seconds / COLOUR_CYCLE_PERIOD, 1.0f, rgb);
+                hue_to_rgb(seconds / COLOUR_CYCLE_PERIOD, 1.0f, rgbw_level);
                 break;
             case EFFECT_BREATHE:
                 level = 0.15f + 0.85f * (0.5f - 0.5f * cosf(TWO_PI * seconds / BREATHE_PERIOD));
-                for (int c = 0; c < 3; c++) rgb[c] = colour[c] * level;
+                for (int c = 0; c < 4; c++) rgbw_level[c] = colour[c] * level;
                 break;
             case EFFECT_TWINKLE:
                 memory->sparkle[i] *= expf(-elapsed / TWINKLE_DECAY_SECONDS);
                 if (next_random(memory) < TWINKLE_RATE_PER_SECOND * elapsed) memory->sparkle[i] = 1.0f;
-                for (int c = 0; c < 3; c++) {
+                for (int c = 0; c < 4; c++) {
                     float background = colour[c] * TWINKLE_BACKGROUND;
-                    rgb[c] = background + (1.0f - background) * memory->sparkle[i];
+                    rgbw_level[c] = background + (1.0f - background) * memory->sparkle[i];
                 }
                 break;
             case EFFECT_RAINBOW_WAVE:
-                hue_to_rgb(point->x * 0.8f - seconds / RAINBOW_WAVE_PERIOD, 1.0f, rgb);
+                hue_to_rgb(point->x * 0.8f - seconds / RAINBOW_WAVE_PERIOD, 1.0f, rgbw_level);
                 break;
             case EFFECT_COLOUR_WAVE:
                 // Crests travel upwards.
                 level = 0.2f + 0.8f * (0.5f + 0.5f * sinf(TWO_PI * (point->y - seconds / COLOUR_WAVE_PERIOD)));
-                for (int c = 0; c < 3; c++) rgb[c] = colour[c] * level;
+                for (int c = 0; c < 4; c++) rgbw_level[c] = colour[c] * level;
                 break;
             case EFFECT_RIPPLE: {
                 float dx = point->x - 0.5f, dy = point->y - 0.5f;
                 float distance = sqrtf(dx * dx + dy * dy);
                 // Rings travel outwards from the middle of the wall.
                 level = 0.15f + 0.85f * (0.5f + 0.5f * cosf(TWO_PI * (distance * 2.0f - seconds / RIPPLE_PERIOD)));
-                for (int c = 0; c < 3; c++) rgb[c] = colour[c] * level;
+                for (int c = 0; c < 4; c++) rgbw_level[c] = colour[c] * level;
                 break;
             }
             case EFFECT_FIRE: {
@@ -169,14 +166,14 @@ void effect_render(effect_t effect, uint64_t now_us, const effect_point_t *point
                 float target = (1.0f - 0.75f * point->y) * (0.55f + 0.45f * next_random(memory));
                 float response = elapsed <= 0.0f ? 1.0f : clamp01(elapsed / FIRE_RESPONSE_SECONDS);
                 memory->heat[i] += (target - memory->heat[i]) * response;
-                heat_to_rgb(memory->heat[i], rgb);
+                heat_to_rgb(memory->heat[i], rgbw_level);
                 break;
             }
             default:
-                memcpy(rgb, colour, sizeof rgb);
+                memcpy(rgbw_level, colour, sizeof rgbw_level);
                 break;
         }
-        write(rgbw[i], rgb, brightness);
+        write(rgbw[i], rgbw_level, brightness);
     }
 }
 
@@ -192,7 +189,7 @@ void effect_render_boot_shimmer(uint64_t elapsed_us, const effect_point_t *point
         float band = 0.5f + 0.5f * cosf(TWO_PI * ((points[i].x + points[i].y) * 0.5f - seconds / BOOT_SWEEP_PERIOD));
         band = band * band * band * band;
         // Deep green to lime on the band's crest, with a touch of teal from the shimmer.
-        const float rgb[3] = {0.35f * band, 0.25f + 0.45f * shimmer + 0.3f * band, 0.12f * shimmer};
-        write(rgbw[i], rgb, fade_in);
+        const float rgbw_level[4] = {0.35f * band, 0.25f + 0.45f * shimmer + 0.3f * band, 0.12f * shimmer, 0.0f};
+        write(rgbw[i], rgbw_level, fade_in);
     }
 }

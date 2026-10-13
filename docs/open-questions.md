@@ -1,6 +1,6 @@
 # Open questions
 
-What is still unknown, and what no longer is. Last revised 2026-09-16.
+What is still unknown, and what no longer is. Last revised 2026-10-13.
 
 The base scope and the Home Assistant phase are both met ([scope.md](scope.md)), so the old grouping by "blocks the base scope" is gone: those questions are in [Answered](#answered) at the bottom. What remains either limits a stretch goal or is background.
 
@@ -11,7 +11,6 @@ The base scope and the Home Assistant phase are both met ([scope.md](scope.md)),
 - **Touch report format.** Canvas squares are touch-sensitive and the OpenAPI reports per-panel touch with a type and strength, so it must cross the bus somewhere. The only candidate seen is the poll reply's first byte, which varies (`10`, `11`, `12`, `20` observed, otherwise `00`) without a known trigger. Nothing is decoded, and whether panels report swipes or the controller infers them is open.
 - **Hot-plug signalling.** `C0` answers `CC` outside a session, which on Shapes means "hot-swap detected". Inside a session no such signal has been seen, so `controller.c` re-reads the layout whenever the square count in the poll reply changes. That works, but it may be polling around an explicit signal we have not recognised.
 - **Panel-side transition unit.** The `TT` byte of `E0 01` is long and looks non-linear: `05` faded over a minute or more, `03` and `0A` showed no visible change within 12–20 s. It was never quantified, because the firmware sends `00` and fades on the Pico instead.
-- **The W byte** of each 6-byte `E0 01` entry. It is assumed to be a white channel by analogy with the OpenAPI's extControl v2 (R G B W); its effect on a square has never actually been tested. The USB `fill`/`set` commands accept it, Home Assistant does not expose it.
 - **Maximum sustainable update rate.** 25 Hz held for 10 minutes with 13 squares and no lost session. The ceiling was never probed, and how it scales with square count is unknown.
 
 ### Layout and identity
@@ -48,6 +47,7 @@ The base scope and the Home Assistant phase are both met ([scope.md](scope.md)),
 | Boot and enumeration sequence | `00` (no reply) then `80` (layout) opens a session; `80` alone is ignored and commands outside a session do nothing | same |
 | Does the Shapes opcode set apply? | For `00`, `80`, `C0`, `E0 01`, `F8` and `FC 04`, yes. `E0 03` (the Shapes bulk-colour form) does nothing and `E0 02` drops the session | same |
 | Colour push format | `E0 01` then one `05 TT R G B W` entry per square, **farthest square first**. A frame with the wrong number of entries is silently ignored, and `01 FF` ("no change" on Shapes) is not accepted | [panel-bus.md](panel-bus.md#two-squares-square-b-linked-to-square-a-pico-and-psu-on-a) |
+| The W byte of each `E0 01` entry | Drives the squares' white LEDs. `00 00 00 FF` lights them white with red, green and blue off; adding red and green warms the tint. Their colour temperature is unmeasured and looked neutral to cool. Home Assistant exposes it from firmware 0.8.0 | [panel-bus.md](panel-bus.md#session-reads-brightness-and-colour) |
 | Global brightness | `FC 04 vv`, `FF` = full. Squares power up at about half and forget it when their power is cut, so it is re-sent with every colour frame | [panel-bus.md](panel-bus.md#session-reads-brightness-and-colour) |
 | Layout encoding for squares | Header `C<side>` per square, other sides clockwise from the entry side, depth-first, PSU as `93 00`, `40` ending the stream and closing every open branch. Parsed blind on a 13-square wall and confirmed against the physical wall | [panel-bus.md](panel-bus.md#layout-encoding) |
 | Per-square identity | `F8 <index> 82` returns a 16-byte hardware ID, `F8 <index> 81` the version (panel firmware 4.6.0). The index counts squares only, skipping the PSU node | [panel-bus.md](panel-bus.md#session-reads-brightness-and-colour) |

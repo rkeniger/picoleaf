@@ -15,6 +15,8 @@ class LightState(ctypes.Structure):
         ("red", ctypes.c_uint8),
         ("green", ctypes.c_uint8),
         ("blue", ctypes.c_uint8),
+        ("white", ctypes.c_uint8),
+        ("kelvin", ctypes.c_uint16),
     ]
 
 
@@ -75,16 +77,17 @@ def apply(lib, state: LightState, payload: str) -> bool:
 
 
 def as_tuple(state: LightState) -> tuple:
-    return (state.on, state.brightness, state.red, state.green, state.blue)
+    return (state.on, state.brightness, state.red, state.green, state.blue, state.white, state.kelvin)
 
 
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ('{"state":"OFF"}', (False, 128, 255, 255, 255)),
-        ('{"state":"ON","brightness":40}', (True, 40, 255, 255, 255)),
-        ('{"state": "ON", "color_mode": "rgb", "color": {"r": 255, "g": 0, "b": 10}}', (True, 128, 255, 0, 10)),
-        ('{"brightness":255,"transition":2}', (True, 255, 255, 255, 255)),
+        ('{"state":"OFF"}', (False, 128, 255, 255, 255, 0, 0)),
+        ('{"state":"ON","brightness":40}', (True, 40, 255, 255, 255, 0, 0)),
+        ('{"state": "ON", "color_mode": "rgb", "color": {"r": 255, "g": 0, "b": 10}}', (True, 128, 255, 0, 10, 0, 0)),
+        ('{"color_mode":"rgbw","color":{"r":1,"g":2,"b":3,"w":200}}', (True, 128, 1, 2, 3, 200, 0)),
+        ('{"brightness":255,"transition":2}', (True, 255, 255, 255, 255, 0, 0)),
     ],
 )
 def test_applies_home_assistant_commands(lib, payload, expected):
@@ -95,7 +98,17 @@ def test_applies_home_assistant_commands(lib, payload, expected):
 
 @pytest.mark.parametrize(
     "payload",
-    ['{"state":"MAYBE"}', '{"brightness":256}', '{"color":{"r":1,"g":2}}', '{"flash":"short"}', "", "not json"],
+    [
+        '{"state":"MAYBE"}',
+        '{"brightness":256}',
+        '{"color":{"r":1,"g":2}}',
+        '{"color":{"r":1,"g":2,"b":3,"w":256}}',
+        '{"color_temp":0}',
+        '{"color_temp":"warm"}',
+        '{"flash":"short"}',
+        "",
+        "not json",
+    ],
 )
 def test_rejects_bad_commands_without_changing_state(lib, payload):
     state = default_state()
@@ -103,13 +116,52 @@ def test_rejects_bad_commands_without_changing_state(lib, payload):
     assert as_tuple(state) == as_tuple(default_state())
 
 
-def test_state_json_round_trips_through_a_command(lib):
-    state = LightState(True, 77, 1, 2, 3)
+@pytest.mark.parametrize(
+    ("kelvin", "rgbw"),
+    [
+        # The ends of the range: the white LEDs alone, and the warm mix picked on the wall.
+        (6500, (0x00, 0x00, 0x00, 0xFF)),
+        (2700, (0x90, 0x30, 0x00, 0xFF)),
+        # Out-of-range temperatures are clamped to the ends.
+        (10000, (0x00, 0x00, 0x00, 0xFF)),
+        (2000, (0x90, 0x30, 0x00, 0xFF)),
+        # 4000 K is 250 mireds, 97 of the 217 mireds from the cool end towards the warm one.
+        (4000, (64, 21, 0, 0xFF)),
+    ],
+)
+def test_colour_temperature_mixes_white_with_amber(lib, kelvin, rgbw):
+    state = default_state()
+    assert apply(lib, state, f'{{"state":"ON","color_temp":{kelvin}}}')
+    assert (state.red, state.green, state.blue, state.white) == rgbw
+    assert state.kelvin == min(max(kelvin, 2700), 6500)
+
+
+def test_colour_after_temperature_leaves_temperature_mode(lib):
+    state = default_state()
+    assert apply(lib, state, '{"color_temp":3000}')
+    assert apply(lib, state, '{"color":{"r":0,"g":0,"b":255,"w":0}}')
+    assert as_tuple(state) == (True, 128, 0, 0, 255, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (
+            LightState(True, 77, 1, 2, 3, 4),
+            {"state": "ON", "brightness": 77, "color_mode": "rgbw", "color": {"r": 1, "g": 2, "b": 3, "w": 4}},
+        ),
+        (
+            LightState(False, 200, 0x90, 0x30, 0, 0xFF, 2700),
+            {"state": "OFF", "brightness": 200, "color_mode": "color_temp", "color_temp": 2700},
+        ),
+    ],
+)
+def test_state_json_round_trips_through_a_command(lib, state, expected):
     buffer = ctypes.create_string_buffer(256)
     length = lib.ha_light_state_json(ctypes.byref(state), None, buffer, len(buffer))
     text = buffer.value.decode()
     assert length == len(text)
-    assert json.loads(text) == {"state": "ON", "brightness": 77, "color_mode": "rgb", "color": {"r": 1, "g": 2, "b": 3}}
+    assert json.loads(text) == expected
     copy = default_state()
     assert apply(lib, copy, text)
     assert as_tuple(copy) == as_tuple(state)
@@ -125,7 +177,8 @@ def test_state_json_reports_truncation(lib):
     [
         (LightState(True, 255, 255, 128, 0), [255, 128, 0, 0]),
         (LightState(True, 128, 255, 255, 255), [128, 128, 128, 0]),
-        (LightState(False, 255, 255, 255, 255), [0, 0, 0, 0]),
+        (LightState(True, 128, 0x90, 0x30, 0, 0xFF), [72, 24, 0, 128]),
+        (LightState(False, 255, 255, 255, 255, 255), [0, 0, 0, 0]),
     ],
 )
 def test_output_scales_colour_by_brightness(lib, state, expected):
@@ -150,7 +203,8 @@ def test_discovery_payload_is_valid_json(lib):
     assert lib.ha_light_discovery_json(ctypes.byref(light), buffer, len(buffer)) > 0
     payload = json.loads(buffer.value)
     assert payload["schema"] == "json"
-    assert payload["supported_color_modes"] == ["rgb"]
+    assert payload["supported_color_modes"] == ["color_temp", "rgbw"]
+    assert (payload["color_temp_kelvin"], payload["min_kelvin"], payload["max_kelvin"]) == (True, 2700, 6500)
     assert payload["device"]["identifiers"] == ["canvas_e6614c311b825937"]
     assert payload["unique_id"].endswith("051900f5")
 

@@ -1,6 +1,6 @@
 # Home Assistant integration
 
-The Pico W runs the Canvas controller and joins Wi-Fi. It shows up in Home Assistant through MQTT discovery as the device **Nanoleaf Canvas**, with one RGB light for the whole wall (with effects), one for each square, and a layout-rotation setting. Transitions fade smoothly. Verified on 2026-09-14 on the 13-square wall.
+The Pico W runs the Canvas controller and joins Wi-Fi. It shows up in Home Assistant through MQTT discovery as the device **Nanoleaf Canvas**, with one RGBW light for the whole wall (with effects), one for each square, and a layout-rotation setting. Transitions fade smoothly. Verified on 2026-09-14 on the 13-square wall; the white channel and colour temperature (firmware 0.8.0) are not yet verified in Home Assistant.
 
 No passwords are stored in this repository. Wi-Fi and MQTT credentials live only in the Pico's flash and in a root-readable file on the server.
 
@@ -25,15 +25,16 @@ Host: a Raspberry Pi (`<pi-host>`, Debian 13, Docker 29). The Home Assistant fro
 | Entity | Controls |
 |---|---|
 | `light.nanoleaf_canvas_wall` | Every square at once, plus effects. Commands apply to each square's own state, so dimming the wall keeps per-square colours unless a colour is sent too |
-| `light.nanoleaf_canvas_tile_0` … `_12` | One square each: on/off, brightness, RGB |
+| `light.nanoleaf_canvas_tile_0` … `_12` | One square each: on/off, brightness, RGBW colour or colour temperature |
 | `select.nanoleaf_canvas_layout_rotation` | How the wall hangs relative to square 0: `0`, `90`, `180`, `270` (clockwise). Only affects effects that depend on position. Saved on the Pico. This wall: `180` |
 
 "Tile N" uses the square's bus order at the time it was first discovered (0 = the square the Pico is plugged into; see [panel-bus.md](panel-bus.md#layout-encoding) for how order follows the layout). The **unique ID comes from each square's 16-byte hardware ID**, so moving squares around keeps the same entity, state and automations. Rename entities in Home Assistant if the numbers stop matching the wall.
 
 Behaviour worth knowing:
-- After power-up, once the Pico has read every square's ID, the wall shimmers in shades of green for 5 s and then fades over 1 s to the reported starting state, "on, white, brightness 128". The first MQTT connection since boot flashes the wall white for 0.2 s, right after the shimmer if it connects during it.
+- After power-up, once the Pico has read every square's ID, the wall shimmers in shades of green for 5 s and then fades over 1 s to the reported starting state: on, warm white (colour temperature 2700 K), brightness 204 (80%). The first MQTT connection since boot flashes the wall white for 0.2 s, right after the shimmer if it connects during it.
 - **Problem signals.** The wall blinks red three times when MQTT isn't connected 30 s after boot (missing settings, Wi-Fi or broker unreachable; `net` over USB says which) or has been down for 30 s; it blinks white once when the connection comes back after that. Shorter outages, like a broker restart, don't blink. When no panel answers the layout read, the wall has nothing to light, so the Pico W's own LED blinks fast instead until panels are found. A Home Assistant command during the shimmer or a blink ends it. Until the first command, the Pico stops sending colours once the startup has finished, so USB `fill`/`set`/`frame` commands still work.
-- Brightness is applied by scaling each square's RGB; the controller sends full global brightness (`FC 04 FF`) with every colour frame, because squares power up at about half and forget `FC 04` when their power is cut.
+- **White and colour temperature.** Each light offers two colour modes. RGBW sets the red, green, blue and white LEDs directly; the white LEDs on their own light the squares (user observation, 2026-10-13). Colour temperature runs from 2700 K to 6500 K: 6500 K is the white LEDs alone (`00 00 00 FF`), 2700 K adds amber (`90 30 00 FF`, picked by eye on the wall as warm white), and temperatures in between are blended in mireds. The kelvin values are nominal [C]; the white LEDs' own colour temperature was never measured and looked neutral to cool.
+- Brightness is applied by scaling each square's RGBW; the controller sends full global brightness (`FC 04 FF`) with every colour frame, because squares power up at about half and forget `FC 04` when their power is cut.
 - Squares that appear later (a re-arranged or extended wall) get the wall's last state if the wall has been commanded, otherwise the default.
 - Light state is kept in RAM; after a Pico reboot everything starts from the default again. The layout rotation is stored in flash.
 - **Transitions** (`"transition": seconds` in a command, or the transition option in scenes and automations) fade linearly on the Pico at 25 Hz, for the wall and single squares. The panels' own transition byte isn't used: its unit is far too long (see [panel-bus.md](panel-bus.md#session-reads-brightness-and-colour)).
@@ -54,6 +55,7 @@ Selected on `light.nanoleaf_canvas_wall` (effect dropdown, scenes, automations).
 | Fire | no | hottest along the bottom |
 
 - Brightness and on/off of the wall apply to effects; changing the wall colour while Breathe, Twinkle, Colour wave or Ripple run changes their colour without restarting them.
+- Effects that use the wall's colour use its white channel too, so a warm white can breathe or ripple; Twinkle's sparkles light the white LEDs at full. Colour cycle, Rainbow wave and Fire leave the white LEDs off.
 - Controlling a single square stops the effect (the wall state reports `Solid`) so the change is visible.
 - Positions come from the layout reply, parsed on the Pico (`src/layout.c`, a port of `tools/layout.py`). "Up" follows the layout-rotation setting.
 
@@ -63,9 +65,9 @@ Selected on `light.nanoleaf_canvas_wall` (effect dropdown, scenes, automations).
 
 | Topic | Direction | Content |
 |---|---|---|
-| `homeassistant/light/canvas_<board>/<object>/config` | Pico → HA, retained | Discovery, JSON schema, `supported_color_modes: ["rgb"]`, unique ID `canvas_<board>_light_<object>` |
-| `canvas/<board>/<object>/set` | HA → Pico | `{"state":"ON","brightness":0-255,"color":{"r":..,"g":..,"b":..},"effect":"Fire","transition":2}`, any subset; `effect` only on the wall |
-| `canvas/<board>/<object>/state` | Pico → HA, retained | Same shape plus `"color_mode":"rgb"` |
+| `homeassistant/light/canvas_<board>/<object>/config` | Pico → HA, retained | Discovery, JSON schema, `supported_color_modes: ["color_temp","rgbw"]`, `color_temp_kelvin: true`, `min_kelvin` 2700, `max_kelvin` 6500, unique ID `canvas_<board>_light_<object>` |
+| `canvas/<board>/<object>/set` | HA → Pico | `{"state":"ON","brightness":0-255,"color":{"r":..,"g":..,"b":..,"w":..},"effect":"Fire","transition":2}` or `"color_temp":<kelvin>` instead of `color`, any subset; `effect` only on the wall. A `color` without `w` turns the white LEDs off |
+| `canvas/<board>/<object>/state` | Pico → HA, retained | Same shape plus `"color_mode":"rgbw"`, or `"color_mode":"color_temp","color_temp":<kelvin>` when the colour came from a temperature |
 | `canvas/<board>/status` | Pico → HA, retained | `online`; `offline` as the last will |
 | `homeassistant/select/canvas_<board>/layout_rotation/config` | Pico → HA, retained | Select discovery, options `0 90 180 270` |
 | `canvas/<board>/layout_rotation/set` / `state` | HA → Pico / Pico → HA (retained) | `0`, `90`, `180` or `270` |

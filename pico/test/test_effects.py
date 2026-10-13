@@ -119,6 +119,16 @@ def test_solid_shows_base_colour_scaled_by_brightness(lib):
     assert set(frame) == {(128, 0, 100, 0)}
 
 
+def test_effects_on_the_wall_colour_carry_its_white(lib):
+    warm_white = LightState(True, 255, 0x90, 0x30, 0, 0xFF)
+    for effect in ("Solid", "Breathe", "Twinkle", "Colour wave", "Ripple"):
+        frames = [Renderer(lib, effect, warm_white).frame(SECOND + step * FRAME) for step in range(10)]
+        assert all(white > 0 for frame in frames for _, _, _, white in frame), effect
+    for effect in ("Colour cycle", "Rainbow wave", "Fire"):
+        frame = Renderer(lib, effect, warm_white).frame(SECOND)
+        assert all(white == 0 for _, _, _, white in frame), effect
+
+
 def test_colour_cycle_is_uniform_and_changes_over_time(lib):
     renderer = Renderer(lib, "Colour cycle")
     first, later = renderer.frame(SECOND), renderer.frame(6 * SECOND)

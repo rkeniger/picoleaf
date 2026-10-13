@@ -29,7 +29,7 @@
 #include "net.h"
 #include "uart_decode.h"
 
-#define FIRMWARE_VERSION "0.7.0"
+#define FIRMWARE_VERSION "0.8.0"
 
 // GP2 is header pin 4, next to GND on pin 3.
 #define BUS_PIN 2
