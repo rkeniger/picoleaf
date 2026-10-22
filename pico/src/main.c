@@ -29,7 +29,7 @@
 #include "net.h"
 #include "uart_decode.h"
 
-#define FIRMWARE_VERSION "0.10.1"
+#define FIRMWARE_VERSION "0.11.0"
 
 // GP2 is header pin 4, next to GND on pin 3.
 #define BUS_PIN 2
@@ -508,13 +508,14 @@ static bool handle_controller_command(const char *command, char *save) {
             const controller_stats_t *stats = &controller.stats;
             printf("STATS enabled=%d session=%d squares=%u sessions_opened=%lu session_failures=%lu sessions_lost=%lu "
                    "frames_sent=%lu polls_ok=%lu max_poll_gap_us=%llu last_bad_poll_length=%lu uids_read=%u "
-                   "uid_read_failures=%lu odd_polls=%lu max_loop_us=%llu uptime_us=%llu\n",
+                   "uid_read_failures=%lu sessions_refreshed=%lu odd_polls=%lu max_loop_us=%llu uptime_us=%llu\n",
                    controller.enabled, controller.in_session, (unsigned)controller.square_count,
                    (unsigned long)stats->sessions_opened, (unsigned long)stats->session_failures,
                    (unsigned long)stats->sessions_lost, (unsigned long)stats->frames_sent,
                    (unsigned long)stats->polls_ok, (unsigned long long)stats->max_poll_gap_us,
                    (unsigned long)stats->last_bad_poll_length, (unsigned)controller.uids_read,
-                   (unsigned long)stats->uid_read_failures, (unsigned long)stats->odd_polls,
+                   (unsigned long)stats->uid_read_failures, (unsigned long)stats->sessions_refreshed,
+                   (unsigned long)stats->odd_polls,
                    (unsigned long long)longest_loop_us, (unsigned long long)time_us_64());
             if (stats->odd_polls > 0) {
                 printf("STATS last_odd_poll=");

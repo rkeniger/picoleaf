@@ -62,6 +62,8 @@ def lib(build_host_library):
     library.ha_rotation_discovery_json.restype = ctypes.c_size_t
     library.ha_publish_squares_discovery_json.argtypes = [ctypes.c_char_p] * 6 + [ctypes.c_size_t]
     library.ha_publish_squares_discovery_json.restype = ctypes.c_size_t
+    library.ha_tap_event_discovery_json.argtypes = [ctypes.c_char_p] * 4 + [ctypes.c_char_p, ctypes.c_size_t]
+    library.ha_tap_event_discovery_json.restype = ctypes.c_size_t
     library.ha_light_state_json.restype = ctypes.c_size_t
     library.ha_light_output.argtypes = [ctypes.POINTER(LightState), ctypes.POINTER(ctypes.c_uint8)]
     library.ha_light_discovery_json.argtypes = [ctypes.POINTER(Discovery), ctypes.c_char_p, ctypes.c_size_t]
@@ -277,3 +279,11 @@ def test_publish_squares_switch_discovery(lib):
     payload = json.loads(buffer.value)
     assert length > 0 and payload["entity_category"] == "config"
     assert (payload["payload_on"], payload["payload_off"], payload["command_topic"]) == ("ON", "OFF", "cmd")
+
+
+def test_tap_event_discovery(lib):
+    buffer = ctypes.create_string_buffer(384)
+    length = lib.ha_tap_event_discovery_json(b"uid", b"canvas/b/tap", b"avail", b"dev", buffer, len(buffer))
+    payload = json.loads(buffer.value)
+    assert length > 0 and payload["event_types"] == ["tap"] and payload["state_topic"] == "canvas/b/tap"
+    assert payload["device"]["identifiers"] == ["dev"]

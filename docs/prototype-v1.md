@@ -153,7 +153,7 @@ Text lines over USB serial; each reply ends with `OK` or `ERR <reason>`.
 | `set <i> RRGGBB[WW]` | One square, bus order |
 | `frame RRGGBB[WW] …` | Squares 0, 1, 2, … in one command |
 | `bright <0-255>` | Panels' global brightness (`FC 04`) |
-| `stats [reset]` | Session, square count, frames, polls, longest poll gap, hardware-ID reads, odd poll replies (and the last one), longest main-loop pass |
+| `stats [reset]` | Session, square count, frames, polls, longest poll gap, hardware-ID reads, session refreshes, odd poll replies (and the last one), longest main-loop pass |
 | `layout` | Square count and the raw layout reply the controller last read |
 | **Network** | |
 | `cfg set <key> <hex>` / `cfg show` / `cfg save` | Wi-Fi and MQTT settings; use `canvasbus.py provision` instead of typing hex |

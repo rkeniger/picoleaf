@@ -9,7 +9,7 @@ A Nanoleaf Canvas (model NL29) is a wall of touch-sensitive light squares. They 
 
 PicoLeaf is a replacement brain. A Raspberry Pi Pico W, wired into one square through a single resistor, finds every square on the wall, drives each one's colour 25 times a second, and announces itself to Home Assistant over MQTT. The protocol was worked out from scratch on the bench with the Pico as its own logic analyser; every claim in [`docs/`](docs/) carries the capture it came from.
 
-Running a 23-square wall, first brought up on 13 squares on 2026-09-14. Firmware 0.10.1.
+Running a 23-square wall, first brought up on 13 squares on 2026-09-14. Firmware 0.11.0.
 
 ## What it does
 
@@ -17,10 +17,11 @@ Running a 23-square wall, first brought up on 13 squares on 2026-09-14. Firmware
 - **Appears in Home Assistant by itself.** MQTT discovery creates one RGBW light per square plus one for the whole wall, with no custom component and no YAML. The squares' white LEDs get their own slider, and a colour-temperature slider mixes them with amber for warm white. Entity identity comes from each square's 16-byte hardware ID, so rearranging the wall doesn't break your automations.
 - **Eight effects**, three of them position-aware (rainbow wave, ripple, fire and friends). They run on the Pico at 25 Hz; nothing streams over the network.
 - **Smooth transitions** for single squares and the wall, usable from scenes and automations.
+- **Tap to toggle.** Touching any square fires a Tap event in Home Assistant, ready for an automation that toggles the wall.
 - **Stands on its own.** On a phone charger, with no computer attached, it rejoins Wi-Fi and the broker by itself, and blinks the wall red when MQTT has been down for 30 seconds.
 - **Holds up.** A 10-minute stress run pushed 14,963 colour frames at 24.9 Hz with no lost session and a worst-case poll gap of 40 ms.
 
-Not there: touch input, the Nanoleaf app, HomeKit, Matter, sound-reactive effects, and streaming from other software — see [scope](docs/scope.md#out-of-scope).
+Not there: per-square touch and gestures (a tap anywhere on the wall is reported), the Nanoleaf app, HomeKit, Matter, sound-reactive effects, and streaming from other software — see [scope](docs/scope.md#out-of-scope).
 
 ## What you need
 

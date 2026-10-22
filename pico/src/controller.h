@@ -12,7 +12,7 @@
 #define CONTROLLER_LAYOUT_MAX 512
 #define CONTROLLER_UID_LENGTH 16
 #define CONTROLLER_TICK_US 40000u  // 25 Hz colour frames and polls
-#define CONTROLLER_ODD_POLL_MAX 32  // bytes kept of the last odd poll reply
+#define CONTROLLER_ODD_POLL_MAX (2 * CONTROLLER_MAX_SQUARES)  // bytes kept of the last odd poll reply: all of it
 
 // Sends `length` bytes, records for `listen_ms` afterwards, and returns how many
 // reply bytes (after our own frame) were written to `reply`.
@@ -26,6 +26,8 @@ typedef enum {
     CONTROLLER_SESSION_LOST,
     // Every square's hardware ID has been read since the session opened.
     CONTROLLER_UIDS_READY,
+    // A periodic refresh reopened the session and found the same layout and hardware IDs.
+    CONTROLLER_SESSION_REFRESHED,
 } controller_event_t;
 
 typedef struct {
@@ -38,6 +40,7 @@ typedef struct {
     // Reply length of the poll that last ended a session (0 = silence, 1 = CC).
     uint32_t last_bad_poll_length;
     uint32_t uid_read_failures;
+    uint32_t sessions_refreshed;
     // Poll replies of the right length but unusual content (see controller_poll_is_odd), and the last one.
     uint32_t odd_polls;
     uint8_t last_odd_poll[CONTROLLER_ODD_POLL_MAX];
@@ -65,6 +68,18 @@ typedef struct {
     uint64_t next_tick_us;
     uint64_t next_session_attempt_us;
     uint64_t last_good_poll_us;
+    // Squares can drop their session yet keep answering polls, and then ignore colour frames until a
+    // new session opens, so the session is reopened every minute. If the layout and IDs come back
+    // unchanged the refresh ends with CONTROLLER_SESSION_REFRESHED instead of CONTROLLER_UIDS_READY.
+    uint64_t next_refresh_us;
+    bool refreshing;
+    bool refresh_found_changes;
+    // Touch reporting (FC 07 01, sent at every session open): a square's first poll byte is 1x while
+    // touched, x rising and falling with the touch, then 10 on release and 00 when idle. A tap is a touch
+    // starting after the whole wall has been untouched for a moment, so one swipe across squares is one tap.
+    uint32_t taps;
+    bool wall_touched;
+    uint64_t last_touch_us;
     controller_stats_t stats;
 } controller_t;
 
@@ -76,6 +91,9 @@ controller_event_t controller_tick(controller_t *controller, uint64_t now_us, co
 bool controller_set(controller_t *controller, size_t index, const uint8_t rgbw[4]);
 void controller_fill(controller_t *controller, const uint8_t rgbw[4]);
 void controller_set_brightness(controller_t *controller, uint8_t brightness);
+
+// Wall taps since boot (see controller_t.taps).
+uint32_t controller_tap_count(const controller_t *controller);
 
 // The hardware ID of the square at `index` (valid once CONTROLLER_UIDS_READY has been reported).
 const uint8_t *controller_uid(const controller_t *controller, size_t index);
@@ -90,5 +108,5 @@ size_t controller_count_squares(const uint8_t *layout, size_t length);
 size_t controller_colour_frame(const controller_t *controller, uint8_t *frame, size_t max);
 
 // True if a poll reply (2 bytes per square) holds anything but the usual pairs: a CC byte anywhere,
-// or a pair whose first byte is not 00, 10, 11, 12 or 20 (seen varying, possibly touch).
+// or a pair whose first byte is neither 00, 20 nor a touch report (10..1F).
 bool controller_poll_is_odd(const uint8_t *reply, size_t length);

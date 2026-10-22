@@ -10,10 +10,12 @@
 //   homeassistant/select/<device>/layout_rotation/config      rotation select discovery (retained)
 //   homeassistant/switch/<device>/publish_squares/config      publish-squares switch discovery (retained)
 //   homeassistant/sensor/<device>/<sensor id>/config           diagnostics sensor discovery (retained)
+//   homeassistant/event/<device>/tap/config                     tap event discovery (retained)
 //   canvas/<board id>/<wall|square id|layout_rotation|publish_squares>/set     commands from HA
 //   canvas/<board id>/<wall|square id|layout_rotation|publish_squares>/state   state (retained)
 //   canvas/<board id>/status                                    online / offline (last will)
 //   canvas/<board id>/diagnostics                               counters, every 60 s and on session loss
+//   canvas/<board id>/tap                                       {"event_type":"tap"} when the wall is tapped
 
 #include <stddef.h>
 #include <stdint.h>

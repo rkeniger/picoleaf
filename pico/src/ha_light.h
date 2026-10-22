@@ -76,3 +76,8 @@ size_t ha_rotation_discovery_json(const char *unique_id, const char *command_top
 size_t ha_publish_squares_discovery_json(const char *unique_id, const char *command_topic, const char *state_topic,
                                          const char *availability_topic, const char *device_id, char *out,
                                          size_t size);
+
+// Discovery for the "Tap" event entity (event type "tap"), fired when the wall is tapped.
+// Returns the length written (excluding NUL), or 0 if `size` is too small.
+size_t ha_tap_event_discovery_json(const char *unique_id, const char *state_topic, const char *availability_topic,
+                                   const char *device_id, char *out, size_t size);

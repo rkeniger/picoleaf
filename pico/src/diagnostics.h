@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define DIAGNOSTICS_ODD_POLL_MAX 32
+#define DIAGNOSTICS_ODD_POLL_MAX 128  // a whole poll reply for 64 squares
 
 // Everything since boot.
 typedef struct {

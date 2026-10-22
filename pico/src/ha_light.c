@@ -223,3 +223,13 @@ size_t ha_publish_squares_discovery_json(const char *unique_id, const char *comm
                            unique_id, command_topic, state_topic, availability_topic, device_id);
     return checked_length(written, size);
 }
+
+size_t ha_tap_event_discovery_json(const char *unique_id, const char *state_topic, const char *availability_topic,
+                                   const char *device_id, char *out, size_t size) {
+    int written = snprintf(out, size,
+                           "{\"name\":\"Tap\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                           "\"availability_topic\":\"%s\",\"event_types\":[\"tap\"],\"icon\":\"mdi:gesture-tap\","
+                           "\"device\":{\"identifiers\":[\"%s\"]}}",
+                           unique_id, state_topic, availability_topic, device_id);
+    return checked_length(written, size);
+}

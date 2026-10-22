@@ -28,6 +28,7 @@ Host: a Raspberry Pi (`<pi-host>`, Debian 13, Docker 29). The Home Assistant fro
 | `light.nanoleaf_canvas_tile_0` … `_22` | One square each: on/off, brightness, RGBW colour or colour temperature |
 | `select.nanoleaf_canvas_layout_rotation` | How the wall hangs relative to square 0: `0`, `90`, `180`, `270` (clockwise). Only affects effects that depend on position. Saved on the Pico. This wall: `180` |
 | `switch.nanoleaf_canvas_publish_squares` | Whether each square gets its own light (firmware 0.10.0). Off: only the wall light is published, and the squares' retained discovery and state messages are deleted from the broker, so the tile entities disappear. Saved on the Pico; on by default |
+| `event.nanoleaf_canvas_tap` | Fires (event type `tap`) when any square is touched after the wall has been untouched for 0.5 s, so a tap or a swipe across several squares is one event (firmware 0.11.0). For tap-to-toggle, trigger an automation on this entity's state changing and toggle `light.nanoleaf_canvas_wall` |
 | `sensor.nanoleaf_canvas_*` (diagnostic) | Seven counters since boot, from firmware 0.9.0: uptime, longest poll gap, longest main-loop pass, sessions lost, MQTT reconnects, squares on the bus, odd poll replies (with the last odd reply's bytes and uptime as attributes). For tracking down squares that stop responding: a square drops its session after ~480 ms without a poll |
 
 "Tile N" uses the square's bus order at the time it was first discovered (0 = the square the Pico is plugged into; see [panel-bus.md](panel-bus.md#layout-encoding) for how order follows the layout). The **unique ID comes from each square's 16-byte hardware ID**, so moving squares around keeps the same entity, state and automations. Rename entities in Home Assistant if the numbers stop matching the wall.
@@ -76,6 +77,8 @@ Selected on `light.nanoleaf_canvas_wall` (effect dropdown, scenes, automations).
 | `homeassistant/switch/canvas_<board>/publish_squares/config` | Pico → HA, retained | Switch discovery, `entity_category: config`, payloads `ON`/`OFF` |
 | `canvas/<board>/publish_squares/set` / `state` | HA → Pico / Pico → HA (retained) | `ON` or `OFF` |
 | `homeassistant/sensor/canvas_<board>/<sensor>/config` | Pico → HA, retained | Diagnostic sensor discovery, `entity_category: diagnostic`, unique ID `canvas_<board>_sensor_<sensor>` |
+| `homeassistant/event/canvas_<board>/tap/config` | Pico → HA, retained | Event discovery, `event_types: ["tap"]` |
+| `canvas/<board>/tap` | Pico → HA, **not** retained | `{"event_type":"tap"}` per tap. Taps while MQTT is down are dropped, so a reconnect doesn't toggle the wall |
 | `canvas/<board>/diagnostics` | Pico → HA, **not** retained | `{"uptime_s":..,"longest_poll_gap_ms":..,"longest_loop_ms":..,"sessions_lost":..,"mqtt_reconnects":..,"squares":..,"odd_polls":..,"last_odd_poll":"<hex>","last_odd_poll_uptime_s":..}` every 60 s and at once when a session is lost. Not retained, because old counters would read as current after a reboot. A poll reply is odd if it has the right length but contains `CC` or a square's first byte isn't `00`, `10`, `11`, `12` or `20` |
 
 ## Broker setup on the server
@@ -136,7 +139,8 @@ To check from USB: `send cfg show` (passwords shown only as `set`/`unset`) and `
 | Power-up | Controller opens the session and reads hardware IDs (~0.5 s for 13 squares); Wi-Fi joins and MQTT connects within ~5 s; discovery and state are republished |
 | Broker restart | Notices the disconnect, clears its ARP cache, reconnects after 5 s, republishes everything |
 | Wi-Fi loss | Rejoins, then reconnects MQTT |
-| After (re)connecting | Publishes the discovery, state and diagnostics messages (60 for the 23-square wall, 14 with the squares not published) one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
+| After (re)connecting | Publishes the discovery, state and diagnostics messages (61 for the 23-square wall, 15 with the squares not published) one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
+| Every 60 s (firmware 0.11.0) | Reopens the session with the squares (`00`, `80`, then one ID read per tick) while colour frames carry on. Squares that dropped their session but still answered polls, and so ignored colour frames until the Pico was power cycled, rejoin within a minute. If the layout and IDs are unchanged nothing is republished; otherwise Home Assistant is updated as after a lost session. Whether a refresh is visible on the wall has not been checked yet |
 | Probe commands over USB (`tx`, `cap`, …) | Pause the controller; `ctl on` resumes |
 
 ## Verification (2026-09-14)

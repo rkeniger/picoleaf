@@ -17,7 +17,7 @@ class Diagnostics(ctypes.Structure):
         ("mqtt_reconnects", ctypes.c_uint32),
         ("squares", ctypes.c_uint32),
         ("odd_polls", ctypes.c_uint32),
-        ("last_odd_poll", ctypes.c_uint8 * 32),
+        ("last_odd_poll", ctypes.c_uint8 * 128),
         ("last_odd_poll_length", ctypes.c_uint32),
         ("last_odd_poll_us", ctypes.c_uint64),
     ]
@@ -41,7 +41,7 @@ def lib(build_host_library):
 
 
 def as_json(lib, diagnostics: Diagnostics) -> dict:
-    buffer = ctypes.create_string_buffer(320)
+    buffer = ctypes.create_string_buffer(512)  # the firmware's buffer
     length = lib.diagnostics_json(ctypes.byref(diagnostics), buffer, len(buffer))
     assert length == len(buffer.value) > 0
     return json.loads(buffer.value)
@@ -79,10 +79,10 @@ def test_no_odd_poll_yet_is_an_empty_string(lib):
 
 def test_longest_odd_poll_fits(lib):
     diagnostics = Diagnostics(
-        uptime_us=2**63, longest_poll_gap_us=2**63, longest_loop_us=2**63, last_odd_poll_length=32
+        uptime_us=2**63, longest_poll_gap_us=2**63, longest_loop_us=2**63, last_odd_poll_length=128
     )
-    diagnostics.last_odd_poll[:] = [0xCC] * 32
-    assert as_json(lib, diagnostics)["last_odd_poll"] == "CC" * 32
+    diagnostics.last_odd_poll[:] = [0xCC] * 128
+    assert as_json(lib, diagnostics)["last_odd_poll"] == "CC" * 128
 
 
 def discovery(lib, index: int) -> dict:

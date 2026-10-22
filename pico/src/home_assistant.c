@@ -58,6 +58,8 @@ static struct {
     bool wall_state_pending;
     bool rotation_discovery_pending;
     bool rotation_state_pending;
+    bool tap_discovery_pending;
+    uint32_t taps_published;  // the controller's tap count as last published
     bool publish_squares_discovery_pending;
     bool publish_squares_state_pending;
     uint32_t sensor_discovery_pending;  // one bit per diagnostics sensor
@@ -148,6 +150,7 @@ static void mark_everything_pending(void) {
     ha.wall_discovery_pending = ha.wall_state_pending = true;
     ha.rotation_discovery_pending = ha.rotation_state_pending = true;
     ha.publish_squares_discovery_pending = ha.publish_squares_state_pending = true;
+    ha.tap_discovery_pending = true;
     ha.sensor_discovery_pending = (1u << diagnostics_sensor_count()) - 1u;
     ha.diagnostics_pending = true;
     mark_squares_pending();
@@ -362,7 +365,7 @@ static bool publish_diagnostics(uint64_t now_us) {
     };
     memcpy(diagnostics.last_odd_poll, stats->last_odd_poll, sizeof diagnostics.last_odd_poll);
     char topic[TOPIC_MAX];
-    static char payload[320];  // static: keeps it off the 4 KB main stack
+    static char payload[512];  // static: keeps it off the 4 KB main stack
     snprintf(topic, sizeof topic, "%s/diagnostics", ha.base_topic);
     if (diagnostics_json(&diagnostics, payload, sizeof payload) == 0) return false;
     // Not retained: after a reboot, old counters would read as current.
@@ -401,6 +404,26 @@ static bool remove_square(const square_t *square) {
     return net_publish(topic, "", true);
 }
 
+static bool publish_tap_discovery(void) {
+    char topic[TOPIC_MAX], state_topic[TOPIC_MAX], unique_id[TOPIC_MAX];
+    static char payload[384];
+    snprintf(topic, sizeof topic, "homeassistant/event/%s/tap/config", ha.client_id);
+    snprintf(state_topic, sizeof state_topic, "%s/tap", ha.base_topic);
+    snprintf(unique_id, sizeof unique_id, "%s_event_tap", ha.client_id);
+    if (ha_tap_event_discovery_json(unique_id, state_topic, ha.availability_topic, ha.client_id, payload,
+                                    sizeof payload) == 0) {
+        return false;
+    }
+    return net_publish(topic, payload, true);
+}
+
+// Not retained: a tap is a moment, not a state.
+static bool publish_tap(void) {
+    char topic[TOPIC_MAX];
+    snprintf(topic, sizeof topic, "%s/tap", ha.base_topic);
+    return net_publish(topic, "{\"event_type\":\"tap\"}", false);
+}
+
 static bool publish_rotation_state(void) {
     char topic[TOPIC_MAX], payload[8];
     snprintf(topic, sizeof topic, "%s/layout_rotation/state", ha.base_topic);
@@ -410,6 +433,12 @@ static bool publish_rotation_state(void) {
 
 // Publishes the next pending message, if any. Returns false when nothing was attempted.
 static bool publish_next(uint64_t now_us) {
+    // Taps go first so the wall reacts quickly; several taps before one is sent count as one.
+    uint32_t taps = controller_tap_count(ha.controller);
+    if (taps != ha.taps_published && !ha.tap_discovery_pending) {
+        if (publish_tap()) ha.taps_published = taps;
+        return true;
+    }
     if (ha.wall_discovery_pending) {
         // Home Assistant prefixes the device name ("Nanoleaf Canvas"), so keep entity names short.
         ha.wall_discovery_pending = !publish_light_discovery("wall", "Wall", true);
@@ -429,6 +458,10 @@ static bool publish_next(uint64_t now_us) {
     }
     if (ha.publish_squares_discovery_pending) {
         ha.publish_squares_discovery_pending = !publish_publish_squares_discovery();
+        return true;
+    }
+    if (ha.tap_discovery_pending) {
+        ha.tap_discovery_pending = !publish_tap_discovery();
         return true;
     }
     if (ha.publish_squares_state_pending) {
@@ -490,6 +523,7 @@ void home_assistant_poll(uint64_t now_us, uint64_t longest_loop_us) {
     if (ha.published_for_connection != net_connection_count()) {
         ha.published_for_connection = net_connection_count();
         mark_everything_pending();
+        ha.taps_published = controller_tap_count(ha.controller);  // taps while disconnected are stale
     }
     if (now_us >= ha.next_diagnostics_us || ha.controller->stats.sessions_lost != ha.diagnostics_sessions_lost) {
         ha.diagnostics_pending = true;

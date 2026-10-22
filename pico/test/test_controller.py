@@ -6,8 +6,9 @@ import ctypes
 
 import pytest
 
-IDLE, OPENED, FAILED, LOST, UIDS_READY = range(5)
+IDLE, OPENED, FAILED, LOST, UIDS_READY, REFRESHED = range(6)
 TICK_US = 40_000
+REFRESH_US = 60_000_000
 EXCHANGE = ctypes.CFUNCTYPE(
     ctypes.c_size_t,
     ctypes.POINTER(ctypes.c_uint8),
@@ -45,6 +46,7 @@ class FakePanels:
         self.poll_reply: list[int] | None = None  # None: 2 bytes per square in the layout
         self.broken_uid_reads: set[int] = set()
         self.hops: dict[int, int] = {}  # relay depth per square index; defaults to the index
+        self.uids: dict[int, bytes] = {}  # hardware ID per square index; defaults to bench_uid
         self.frames: list[list[int]] = []
         self.callback = EXCHANGE(self.exchange)
 
@@ -55,7 +57,7 @@ class FakePanels:
             answer = self.layout
         elif len(sent) == 4 and sent[0] == 0xF8 and sent[3] == 0x82:
             index = sent[1] | sent[2] << 8
-            uid = bench_uid(index)
+            uid = self.uids.get(index, bench_uid(index))
             crc = crc16_arc(uid)
             if index in self.broken_uid_reads:
                 crc ^= 0xFFFF
@@ -88,6 +90,8 @@ def library(build_host_library):
     lib.controller_count_squares.restype = ctypes.c_size_t
     lib.controller_poll_is_odd.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
     lib.controller_poll_is_odd.restype = ctypes.c_bool
+    lib.controller_tap_count.argtypes = [ctypes.c_void_p]
+    lib.controller_tap_count.restype = ctypes.c_uint32
     return lib
 
 
@@ -106,6 +110,9 @@ class Controller:
 
     def uid(self, index: int) -> bytes:
         return bytes(self.lib.controller_uid(self.storage, index)[:16])
+
+    def taps(self) -> int:
+        return self.lib.controller_tap_count(self.storage)
 
     def set(self, index: int, rgbw: list[int]) -> bool:
         return self.lib.controller_set(self.storage, index, (ctypes.c_uint8 * 4)(*rgbw))
@@ -130,14 +137,14 @@ def test_opens_session_then_reads_ids_one_per_tick(library):
     panels = FakePanels(TWO_SQUARES)
     controller = Controller(library, panels)
     assert controller.tick(0) == OPENED
-    assert panels.frames == [[0x00], [0x80]]
+    assert panels.frames == [[0x00], [0x80], [0xFC, 0x07, 0x01]]  # touch reporting on
     assert controller.tick(0) == IDLE
-    assert panels.sent_since(2) == [[0xF8, 0x00, 0x00, 0x82], [0xC0]]
+    assert panels.sent_since(3) == [[0xF8, 0x00, 0x00, 0x82], [0xC0]]
     assert controller.tick(TICK_US) == UIDS_READY
-    assert panels.sent_since(4) == [[0xF8, 0x01, 0x00, 0x82], [0xC0]]
+    assert panels.sent_since(5) == [[0xF8, 0x01, 0x00, 0x82], [0xC0]]
     assert controller.uid(0) == bench_uid(0) and controller.uid(1) == bench_uid(1)
     assert controller.tick(2 * TICK_US) == IDLE
-    assert panels.sent_since(6) == [[0xC0]]
+    assert panels.sent_since(7) == [[0xC0]]
 
 
 def test_bad_id_crc_is_retried_then_session_restarts(library):
@@ -224,7 +231,8 @@ def test_reads_ids_when_hop_count_differs_from_index(library):
     ("reply", "odd"),
     [
         ("00 00 00 00", False),
-        ("10 00 11 00 12 00 20 00", False),  # first bytes seen varying, possibly touch
+        ("10 00 11 00 12 00 20 00", False),
+        ("1B 00 13 00", False),  # touch reports
         ("", False),
         ("CC 00", True),
         ("00 CC", True),
@@ -244,3 +252,123 @@ def test_odd_poll_of_the_right_length_keeps_the_session(library):
     panels.poll_reply = [0x00, 0x00, 0xCC, 0x00]
     assert controller.tick(10 * TICK_US) == IDLE
     assert panels.frames.count([0x80]) == 1
+
+
+def run_until_idle_after_refresh(controller: Controller, start: int) -> list[int]:
+    """Ticks from `start` until the refresh has read every ID again; returns the events."""
+    events = []
+    now = start
+    for _ in range(10):
+        events.append(controller.tick(now))
+        now += TICK_US
+        if events[-1] in (UIDS_READY, REFRESHED, LOST, FAILED):
+            break
+    return events
+
+
+def test_reopens_the_session_every_minute_and_reports_an_unchanged_wall(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    controller.set(0, [0xFF, 0x00, 0x00, 0x00])
+    assert controller.tick(REFRESH_US - TICK_US) == IDLE
+    mark = len(panels.frames)
+    events = run_until_idle_after_refresh(controller, REFRESH_US)
+    # Quiet: no "opened" or "lost", and the IDs are read again before it reports the outcome.
+    assert events == [IDLE, IDLE, REFRESHED]
+    sent = panels.sent_since(mark)
+    assert sent[:2] == [[0x00], [0x80]]
+    assert [0xF8, 0x00, 0x00, 0x82] in sent and [0xF8, 0x01, 0x00, 0x82] in sent
+    # Colour frames carry on during the refresh, so squares that had dropped out get them at once.
+    assert any(frame[:2] == [0xE0, 0x01] for frame in sent[2:])
+
+
+def test_refreshes_again_a_minute_later(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    assert REFRESHED in run_until_idle_after_refresh(controller, REFRESH_US)
+    assert controller.tick(REFRESH_US + 10 * TICK_US) == IDLE
+    assert panels.frames.count([0x80]) == 2
+    assert REFRESHED in run_until_idle_after_refresh(controller, 2 * REFRESH_US + 3 * TICK_US)
+    assert panels.frames.count([0x80]) == 3
+
+
+def test_refresh_reports_a_changed_square_as_new_ids(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    panels.uids[1] = bytes(range(16))
+    assert run_until_idle_after_refresh(controller, REFRESH_US)[-1] == UIDS_READY
+    assert controller.uid(1) == bytes(range(16))
+
+
+def test_refresh_reports_a_changed_layout_as_new_ids(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    panels.layout = [0xC3, 0x00, 0x93, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x40]  # same squares, attached elsewhere
+    assert run_until_idle_after_refresh(controller, REFRESH_US)[-1] == UIDS_READY
+
+
+def test_failed_refresh_reopens_like_a_lost_session(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    panels.layout = [0xC3, 0x00]  # no end marker
+    assert controller.tick(REFRESH_US) == FAILED
+    panels.layout = TWO_SQUARES
+    assert controller.tick(REFRESH_US + 1_000_000) == OPENED
+    assert run_until_idle_after_refresh(controller, REFRESH_US + 1_000_000)[-1] == UIDS_READY
+
+
+def tap_sequence(controller: Controller, panels: FakePanels, polls: list[list[int]], start: int) -> int:
+    """Feeds one poll reply per tick and returns the taps counted."""
+    now = start
+    for reply in polls:
+        panels.poll_reply = reply
+        controller.tick(now)
+        now += TICK_US
+    panels.poll_reply = None
+    return controller.taps()
+
+
+IDLE_POLL = [0x00, 0x00, 0x00, 0x00]
+
+
+def test_a_tap_on_any_square_counts_once(library):
+    # As on the wall: 13 00 then 10 00 (release) then 00 00 on one square.
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    taps = tap_sequence(
+        controller, panels, [[0x00, 0x00, 0x13, 0x00], [0x00, 0x00, 0x10, 0x00], IDLE_POLL], 10 * TICK_US
+    )
+    assert taps == 1
+
+
+def test_a_swipe_across_squares_counts_once(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    swipe = [[0x11, 0x00, 0x00, 0x00], [0x16, 0x00, 0x00, 0x00], [0x00, 0x00, 0x11, 0x00], [0x00, 0x00, 0x10, 0x00]]
+    assert tap_sequence(controller, panels, [*swipe, IDLE_POLL], 10 * TICK_US) == 1
+
+
+def test_a_release_alone_is_not_a_tap(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    assert tap_sequence(controller, panels, [[0x10, 0x00, 0x00, 0x00], IDLE_POLL], 10 * TICK_US) == 0
+
+
+def test_taps_need_half_a_second_of_quiet_between_them(library):
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    tap = [[0x12, 0x00, 0x00, 0x00], IDLE_POLL]
+    assert tap_sequence(controller, panels, tap, 10 * TICK_US) == 1
+    # 200 ms after the wall went quiet: part of the same gesture.
+    assert tap_sequence(controller, panels, tap, 16 * TICK_US) == 1
+    # Well after that: a new tap.
+    assert tap_sequence(controller, panels, tap, 40 * TICK_US) == 2

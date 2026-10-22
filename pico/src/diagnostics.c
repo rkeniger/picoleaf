@@ -32,7 +32,7 @@ static size_t checked_length(int written, size_t size) {
 }
 
 size_t diagnostics_json(const diagnostics_t *diagnostics, char *out, size_t size) {
-    char hex[2 * DIAGNOSTICS_ODD_POLL_MAX + 1];
+    static char hex[2 * DIAGNOSTICS_ODD_POLL_MAX + 1];  // static: keeps it off the 4 KB main stack
     size_t length = diagnostics->last_odd_poll_length;
     if (length > DIAGNOSTICS_ODD_POLL_MAX) length = DIAGNOSTICS_ODD_POLL_MAX;
     for (size_t i = 0; i < length; i++) snprintf(hex + 2 * i, 3, "%02X", diagnostics->last_odd_poll[i]);

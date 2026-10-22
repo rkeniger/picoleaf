@@ -3,6 +3,10 @@
 #include <string.h>
 
 #define SESSION_RETRY_US 1000000u
+#define SESSION_REFRESH_US 60000000u
+// A touch counts as a new tap only after the wall has been untouched this long (touches last 0.2-0.7 s).
+#define TAP_QUIET_US 500000u
+#define TOUCH_ACTIVE 0x10  // high nibble of a square's first poll byte while touched or releasing
 // Relayed replies finish within ~0.6 ms for 13 squares (docs/panel-bus.md).
 #define LAYOUT_LISTEN_MS 20u
 #define POLL_LISTEN_MS 5u
@@ -21,6 +25,10 @@ void controller_init(controller_t *controller, uint64_t now_us) {
     controller->next_tick_us = now_us;
 }
 
+uint32_t controller_tap_count(const controller_t *controller) {
+    return controller->taps;
+}
+
 const uint8_t *controller_uid(const controller_t *controller, size_t index) {
     return controller->uids[index];
 }
@@ -37,10 +45,7 @@ uint16_t controller_crc16_arc(const uint8_t *data, size_t length) {
 bool controller_poll_is_odd(const uint8_t *reply, size_t length) {
     for (size_t i = 0; i < length; i++) {
         if (reply[i] == 0xCC) return true;
-        if (i % 2 == 0 && reply[i] != 0x00 && reply[i] != 0x10 && reply[i] != 0x11 && reply[i] != 0x12 &&
-            reply[i] != 0x20) {
-            return true;
-        }
+        if (i % 2 == 0 && reply[i] != 0x00 && reply[i] != 0x20 && (reply[i] & 0xF0) != TOUCH_ACTIVE) return true;
     }
     return false;
 }
@@ -104,11 +109,20 @@ static bool read_uid(controller_t *controller, size_t index, controller_exchange
         controller->stats.uid_read_failures++;
         return false;
     }
+    if (controller->refreshing && memcmp(controller->uids[index], uid, CONTROLLER_UID_LENGTH) != 0) {
+        controller->refresh_found_changes = true;
+    }
     memcpy(controller->uids[index], uid, CONTROLLER_UID_LENGTH);
     return true;
 }
 
-static controller_event_t open_session(controller_t *controller, uint64_t now_us, controller_exchange_fn exchange) {
+// `refresh` reopens a working session; it reports CONTROLLER_IDLE instead of CONTROLLER_SESSION_OPENED.
+static controller_event_t open_session(controller_t *controller, uint64_t now_us, controller_exchange_fn exchange,
+                                       bool refresh) {
+    // A refresh compares the new layout with the old one by length and CRC, keeping the stack small.
+    size_t old_length = controller->layout_length;
+    uint16_t old_crc = controller_crc16_arc(controller->layout, old_length);
+    size_t old_squares = controller->square_count;
     uint8_t ignored[4];
     exchange((const uint8_t[]){0x00}, 1, 2, ignored, sizeof ignored);
     size_t length =
@@ -117,6 +131,7 @@ static controller_event_t open_session(controller_t *controller, uint64_t now_us
     if (length == 0 || controller->layout[length - 1] != LAYOUT_END || squares == 0 ||
         squares > CONTROLLER_MAX_SQUARES) {
         controller->layout_length = 0;
+        controller->in_session = false;  // a failed refresh retries like a lost session
         controller->stats.session_failures++;
         controller->next_session_attempt_us = now_us + SESSION_RETRY_US;
         return CONTROLLER_SESSION_FAILED;
@@ -128,17 +143,49 @@ static controller_event_t open_session(controller_t *controller, uint64_t now_us
     controller->in_session = true;
     controller->last_good_poll_us = now_us;
     controller->next_tick_us = now_us;
+    controller->next_refresh_us = now_us + SESSION_REFRESH_US;
+    // Touch reports were only seen after this (a Shapes broadcast), and a new session may not keep it.
+    exchange((const uint8_t[]){0xFC, 0x07, 0x01}, 3, 0, ignored, sizeof ignored);
+    controller->refreshing = refresh;
+    controller->refresh_found_changes = refresh && (length != old_length || squares != old_squares ||
+                                                    controller_crc16_arc(controller->layout, length) != old_crc);
+    if (refresh) {
+        controller->stats.sessions_refreshed++;
+        return CONTROLLER_IDLE;
+    }
     controller->stats.sessions_opened++;
     return CONTROLLER_SESSION_OPENED;
+}
+
+static void count_taps(controller_t *controller, const uint8_t *reply, size_t length, uint64_t now_us) {
+    bool touching = false, starting = false;
+    for (size_t i = 0; i < length; i += 2) {
+        if ((reply[i] & 0xF0) != TOUCH_ACTIVE) continue;
+        touching = true;
+        if (reply[i] != TOUCH_ACTIVE) starting = true;  // 10 alone is a release
+    }
+    bool quiet = controller->last_touch_us == 0 || now_us - controller->last_touch_us >= TAP_QUIET_US;
+    if (starting && !controller->wall_touched && quiet) {
+        controller->taps++;
+    }
+    if (touching) {
+        controller->wall_touched = true;
+        controller->last_touch_us = now_us;
+    } else {
+        controller->wall_touched = false;
+    }
 }
 
 controller_event_t controller_tick(controller_t *controller, uint64_t now_us, controller_exchange_fn exchange) {
     if (!controller->enabled) return CONTROLLER_IDLE;
     if (!controller->in_session) {
         if (now_us < controller->next_session_attempt_us) return CONTROLLER_IDLE;
-        return open_session(controller, now_us, exchange);
+        return open_session(controller, now_us, exchange, false);
     }
     if (now_us < controller->next_tick_us) return CONTROLLER_IDLE;
+    if (now_us >= controller->next_refresh_us && controller->uids_read == controller->square_count) {
+        return open_session(controller, now_us, exchange, true);
+    }
 
     uint8_t reply[REPLY_MAX];
     bool uids_completed = false;
@@ -182,6 +229,7 @@ controller_event_t controller_tick(controller_t *controller, uint64_t now_us, co
     if (gap > controller->stats.max_poll_gap_us) controller->stats.max_poll_gap_us = gap;
     controller->last_good_poll_us = now_us;
     controller->stats.polls_ok++;
+    count_taps(controller, reply, poll_length, now_us);
     if (controller_poll_is_odd(reply, poll_length)) {
         controller_stats_t *stats = &controller->stats;
         stats->odd_polls++;
@@ -190,5 +238,8 @@ controller_event_t controller_tick(controller_t *controller, uint64_t now_us, co
         memcpy(stats->last_odd_poll, reply, stats->last_odd_poll_length);
         stats->last_odd_poll_us = now_us;
     }
-    return uids_completed ? CONTROLLER_UIDS_READY : CONTROLLER_IDLE;
+    if (!uids_completed) return CONTROLLER_IDLE;
+    bool unchanged = controller->refreshing && !controller->refresh_found_changes;
+    controller->refreshing = false;
+    return unchanged ? CONTROLLER_SESSION_REFRESHED : CONTROLLER_UIDS_READY;
 }
