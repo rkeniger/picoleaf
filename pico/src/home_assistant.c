@@ -34,6 +34,7 @@ typedef struct {
     light_state_t state;
     bool discovery_pending;
     bool state_pending;
+    bool removal_pending;  // clear its retained discovery and state, while squares aren't published
 } square_t;
 
 static struct {
@@ -57,6 +58,8 @@ static struct {
     bool wall_state_pending;
     bool rotation_discovery_pending;
     bool rotation_state_pending;
+    bool publish_squares_discovery_pending;
+    bool publish_squares_state_pending;
     uint32_t sensor_discovery_pending;  // one bit per diagnostics sensor
     bool diagnostics_pending;
     uint64_t next_diagnostics_us;
@@ -130,16 +133,24 @@ static void apply_layout_rotation(void) {
     renderer_set_layout(&ha.renderer, ha.positions, ha.index_count, ha.config->layout_rotation / 90u);
 }
 
+// Squares in the current layout get published, or removed from Home Assistant when publish_squares is off.
+static void mark_squares_pending(void) {
+    bool publish = ha.config->publish_squares;
+    for (size_t index = 0; index < ha.index_count; index++) {
+        if (ha.by_index[index] < 0) continue;
+        square_t *square = &ha.known[ha.by_index[index]];
+        square->discovery_pending = square->state_pending = publish;
+        square->removal_pending = !publish;
+    }
+}
+
 static void mark_everything_pending(void) {
     ha.wall_discovery_pending = ha.wall_state_pending = true;
     ha.rotation_discovery_pending = ha.rotation_state_pending = true;
+    ha.publish_squares_discovery_pending = ha.publish_squares_state_pending = true;
     ha.sensor_discovery_pending = (1u << diagnostics_sensor_count()) - 1u;
     ha.diagnostics_pending = true;
-    for (size_t index = 0; index < ha.index_count; index++) {
-        if (ha.by_index[index] < 0) continue;
-        ha.known[ha.by_index[index]].discovery_pending = true;
-        ha.known[ha.by_index[index]].state_pending = true;
-    }
+    mark_squares_pending();
 }
 
 void home_assistant_on_controller_event(controller_event_t event, uint64_t now_us) {
@@ -178,6 +189,17 @@ static void handle_rotation_command(const char *payload) {
     if (!config_flash_save(ha.config)) printf("HA layout rotation applied but could not be saved to flash\n");
     apply_layout_rotation();
     ha.rotation_state_pending = true;
+}
+
+static void handle_publish_squares_command(const char *payload) {
+    const char *value = strcmp(payload, "ON") == 0 ? "1" : strcmp(payload, "OFF") == 0 ? "0" : NULL;
+    if (value == NULL || !config_set_field(ha.config, "publish_squares", value)) {
+        printf("HA ignored publish squares '%s' (expected ON or OFF)\n", payload);
+        return;
+    }
+    if (!config_flash_save(ha.config)) printf("HA publish squares applied but could not be saved to flash\n");
+    mark_squares_pending();
+    ha.publish_squares_state_pending = true;
 }
 
 static void handle_wall_command(const char *payload, size_t length, uint64_t now_us) {
@@ -250,6 +272,8 @@ void home_assistant_on_message(const char *topic, const char *payload, size_t le
         handle_wall_command(payload, length, now_us);
     } else if (target_length == 15 && strncmp(target, "layout_rotation", 15) == 0) {
         handle_rotation_command(payload);
+    } else if (target_length == 15 && strncmp(target, "publish_squares", 15) == 0) {
+        handle_publish_squares_command(payload);
     } else {
         handle_square_command(target, target_length, payload, length, now_us);
     }
@@ -348,6 +372,35 @@ static bool publish_diagnostics(uint64_t now_us) {
     return true;
 }
 
+static bool publish_publish_squares_discovery(void) {
+    char topic[TOPIC_MAX], command_topic[TOPIC_MAX], state_topic[TOPIC_MAX], unique_id[TOPIC_MAX];
+    static char payload[512];
+    snprintf(topic, sizeof topic, "homeassistant/switch/%s/publish_squares/config", ha.client_id);
+    snprintf(command_topic, sizeof command_topic, "%s/publish_squares/set", ha.base_topic);
+    snprintf(state_topic, sizeof state_topic, "%s/publish_squares/state", ha.base_topic);
+    snprintf(unique_id, sizeof unique_id, "%s_switch_publish_squares", ha.client_id);
+    if (ha_publish_squares_discovery_json(unique_id, command_topic, state_topic, ha.availability_topic, ha.client_id,
+                                          payload, sizeof payload) == 0) {
+        return false;
+    }
+    return net_publish(topic, payload, true);
+}
+
+static bool publish_publish_squares_state(void) {
+    char topic[TOPIC_MAX];
+    snprintf(topic, sizeof topic, "%s/publish_squares/state", ha.base_topic);
+    return net_publish(topic, ha.config->publish_squares ? "ON" : "OFF", true);
+}
+
+// Empty retained messages delete the square's entity in Home Assistant and its stored state on the broker.
+static bool remove_square(const square_t *square) {
+    char topic[TOPIC_MAX];
+    snprintf(topic, sizeof topic, "homeassistant/light/%s/%s/config", ha.client_id, square->uid_hex);
+    if (!net_publish(topic, "", true)) return false;
+    snprintf(topic, sizeof topic, "%s/%s/state", ha.base_topic, square->uid_hex);
+    return net_publish(topic, "", true);
+}
+
 static bool publish_rotation_state(void) {
     char topic[TOPIC_MAX], payload[8];
     snprintf(topic, sizeof topic, "%s/layout_rotation/state", ha.base_topic);
@@ -374,6 +427,14 @@ static bool publish_next(uint64_t now_us) {
         ha.rotation_state_pending = !publish_rotation_state();
         return true;
     }
+    if (ha.publish_squares_discovery_pending) {
+        ha.publish_squares_discovery_pending = !publish_publish_squares_discovery();
+        return true;
+    }
+    if (ha.publish_squares_state_pending) {
+        ha.publish_squares_state_pending = !publish_publish_squares_state();
+        return true;
+    }
     for (size_t index = 0; index < diagnostics_sensor_count(); index++) {
         if (ha.sensor_discovery_pending & (1u << index)) {
             if (publish_sensor_discovery(index)) ha.sensor_discovery_pending &= ~(1u << index);
@@ -383,6 +444,14 @@ static bool publish_next(uint64_t now_us) {
     for (size_t index = 0; index < ha.index_count; index++) {
         if (ha.by_index[index] < 0) continue;
         square_t *square = &ha.known[ha.by_index[index]];
+        if (!ha.config->publish_squares) {
+            square->discovery_pending = square->state_pending = false;  // e.g. after a wall command
+            if (square->removal_pending) {
+                square->removal_pending = !remove_square(square);
+                return true;
+            }
+            continue;
+        }
         if (square->discovery_pending) {
             char name[32];
             snprintf(name, sizeof name, "Tile %u", (unsigned)index);

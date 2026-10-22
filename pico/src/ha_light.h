@@ -71,3 +71,9 @@ size_t ha_light_discovery_json(const ha_light_discovery_t *light, char *out, siz
 // Returns the length written (excluding NUL), or 0 if `size` is too small.
 size_t ha_rotation_discovery_json(const char *unique_id, const char *command_topic, const char *state_topic,
                                   const char *availability_topic, const char *device_id, char *out, size_t size);
+
+// Discovery for the "Publish squares" switch (payloads ON/OFF, entity category config).
+// Returns the length written (excluding NUL), or 0 if `size` is too small.
+size_t ha_publish_squares_discovery_json(const char *unique_id, const char *command_topic, const char *state_topic,
+                                         const char *availability_topic, const char *device_id, char *out,
+                                         size_t size);

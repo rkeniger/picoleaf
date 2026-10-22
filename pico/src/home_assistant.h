@@ -1,15 +1,17 @@
 #pragma once
 
-// Publishes the wall and each square as Home Assistant MQTT lights, plus a layout-rotation select
-// and diagnostic sensors, and turns their commands into fades and effects on the controller. Squares
-// are identified by hardware ID, so re-arranging them keeps Home Assistant entities and state.
+// Publishes the wall and each square (unless publish_squares is off) as Home Assistant MQTT lights,
+// plus a layout-rotation select, a publish-squares switch and diagnostic sensors, and turns their
+// commands into fades and effects on the controller. Squares are identified by hardware ID, so
+// re-arranging them keeps Home Assistant entities and state.
 //
 // Topics, with <device> = canvas_<board id>:
 //   homeassistant/light/<device>/<wall|square id>/config      light discovery (retained)
 //   homeassistant/select/<device>/layout_rotation/config      rotation select discovery (retained)
+//   homeassistant/switch/<device>/publish_squares/config      publish-squares switch discovery (retained)
 //   homeassistant/sensor/<device>/<sensor id>/config           diagnostics sensor discovery (retained)
-//   canvas/<board id>/<wall|square id|layout_rotation>/set     commands from HA
-//   canvas/<board id>/<wall|square id|layout_rotation>/state   state (retained)
+//   canvas/<board id>/<wall|square id|layout_rotation|publish_squares>/set     commands from HA
+//   canvas/<board id>/<wall|square id|layout_rotation|publish_squares>/state   state (retained)
 //   canvas/<board id>/status                                    online / offline (last will)
 //   canvas/<board id>/diagnostics                               counters, every 60 s and on session loss
 

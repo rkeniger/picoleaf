@@ -211,3 +211,15 @@ size_t ha_rotation_discovery_json(const char *unique_id, const char *command_top
                            unique_id, command_topic, state_topic, availability_topic, device_id);
     return checked_length(written, size);
 }
+
+size_t ha_publish_squares_discovery_json(const char *unique_id, const char *command_topic, const char *state_topic,
+                                         const char *availability_topic, const char *device_id, char *out,
+                                         size_t size) {
+    int written = snprintf(out, size,
+                           "{\"name\":\"Publish squares\",\"unique_id\":\"%s\",\"command_topic\":\"%s\","
+                           "\"state_topic\":\"%s\",\"availability_topic\":\"%s\",\"entity_category\":\"config\","
+                           "\"icon\":\"mdi:view-grid-outline\",\"payload_on\":\"ON\",\"payload_off\":\"OFF\","
+                           "\"device\":{\"identifiers\":[\"%s\"]}}",
+                           unique_id, command_topic, state_topic, availability_topic, device_id);
+    return checked_length(written, size);
+}

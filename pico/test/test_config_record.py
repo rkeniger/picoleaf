@@ -16,11 +16,16 @@ class DeviceConfig(ctypes.Structure):
         ("mqtt_user", ctypes.c_char * 65),
         ("mqtt_password", ctypes.c_char * 65),
         ("layout_rotation", ctypes.c_uint16),
+        ("publish_squares", ctypes.c_uint8),
     ]
 
 
-class DeviceConfigV1(ctypes.Structure):
+class DeviceConfigV2(ctypes.Structure):
     _fields_ = DeviceConfig._fields_[:-1]
+
+
+class DeviceConfigV1(ctypes.Structure):
+    _fields_ = DeviceConfig._fields_[:-2]
 
 
 RECORD_SIZE = 4 + 2 + 2 + ctypes.sizeof(DeviceConfig) + 4
@@ -53,10 +58,10 @@ def configured(lib) -> DeviceConfig:
     return config
 
 
-def test_defaults_to_mqtt_port_1883(lib):
+def test_defaults_to_mqtt_port_1883_and_publishing_squares(lib):
     config = DeviceConfig()
     lib.config_defaults(ctypes.byref(config))
-    assert config.mqtt_port == 1883 and config.wifi_ssid == b""
+    assert config.mqtt_port == 1883 and config.wifi_ssid == b"" and config.publish_squares == 1
 
 
 def test_record_round_trips(lib):
@@ -145,3 +150,44 @@ def test_rotation_round_trips(lib, rotation):
 def test_rejects_other_rotations(lib, rotation):
     config = configured(lib)
     assert not lib.config_set_field(ctypes.byref(config), b"layout_rotation", rotation.encode())
+
+
+def v2_record(rotation: int) -> bytes:
+    payload = DeviceConfigV2()
+    payload.wifi_ssid = b"HomeWifi"
+    payload.mqtt_port = 1883
+    payload.layout_rotation = rotation
+    body = (0x53564E43).to_bytes(4, "little") + (2).to_bytes(2, "little")
+    body += ctypes.sizeof(DeviceConfigV2).to_bytes(2, "little") + bytes(payload)
+    return body + crc32(body).to_bytes(4, "little")
+
+
+def test_version_2_record_still_loads_publishing_squares(lib):
+    record = v2_record(180)
+    decoded = DeviceConfig()
+    assert lib.config_decode(record, len(record), ctypes.byref(decoded))
+    assert (decoded.wifi_ssid, decoded.layout_rotation, decoded.publish_squares) == (b"HomeWifi", 180, 1)
+
+
+def test_version_1_record_publishes_squares(lib):
+    record = v1_record(b"HomeWifi")
+    decoded = DeviceConfig()
+    assert lib.config_decode(record, len(record), ctypes.byref(decoded))
+    assert decoded.publish_squares == 1
+
+
+@pytest.mark.parametrize("value", ["0", "1"])
+def test_publish_squares_round_trips(lib, value):
+    config = configured(lib)
+    assert lib.config_set_field(ctypes.byref(config), b"publish_squares", value.encode())
+    record = ctypes.create_string_buffer(RECORD_SIZE)
+    lib.config_encode(ctypes.byref(config), record, len(record))
+    decoded = DeviceConfig()
+    assert lib.config_decode(record.raw, RECORD_SIZE, ctypes.byref(decoded))
+    assert decoded.publish_squares == int(value)
+
+
+@pytest.mark.parametrize("value", ["2", "on", ""])
+def test_rejects_other_publish_squares_values(lib, value):
+    config = configured(lib)
+    assert not lib.config_set_field(ctypes.byref(config), b"publish_squares", value.encode())

@@ -29,7 +29,7 @@
 #include "net.h"
 #include "uart_decode.h"
 
-#define FIRMWARE_VERSION "0.9.0"
+#define FIRMWARE_VERSION "0.10.0"
 
 // GP2 is header pin 4, next to GND on pin 3.
 #define BUS_PIN 2
@@ -417,16 +417,16 @@ static bool handle_network_command(const char *command, char *save) {
             if (!key || !decode_hex_string(strtok_r(NULL, " \t", &save), value, sizeof value) ||
                 !config_set_field(&device_config, key, value)) {
                 printf("ERR usage: cfg set <wifi_ssid|wifi_password|mqtt_host|mqtt_port|mqtt_user|mqtt_password|"
-                       "layout_rotation> <hex value>\n");
+                       "layout_rotation|publish_squares> <hex value>\n");
                 return true;
             }
         } else if (action && strcmp(action, "show") == 0) {
             // Passwords are never echoed back.
             printf("CFG wifi_ssid=%s wifi_password=%s mqtt_host=%s mqtt_port=%u mqtt_user=%s mqtt_password=%s "
-                   "layout_rotation=%u\n",
+                   "layout_rotation=%u publish_squares=%u\n",
                    device_config.wifi_ssid, device_config.wifi_password[0] ? "set" : "unset", device_config.mqtt_host,
                    device_config.mqtt_port, device_config.mqtt_user, device_config.mqtt_password[0] ? "set" : "unset",
-                   device_config.layout_rotation);
+                   device_config.layout_rotation, device_config.publish_squares);
         } else if (action && strcmp(action, "save") == 0) {
             if (!config_flash_save(&device_config)) {
                 printf("ERR writing settings to flash failed\n");

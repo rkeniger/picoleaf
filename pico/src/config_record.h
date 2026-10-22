@@ -16,6 +16,8 @@ typedef struct {
     char mqtt_password[65];
     // Clockwise rotation of the wall relative to the first square's frame: 0, 90, 180 or 270.
     uint16_t layout_rotation;
+    // 1 to publish every square to Home Assistant as its own light, 0 for the wall light only.
+    uint8_t publish_squares;
 } device_config_t;
 
 // Record: magic, version, payload length, payload, CRC-32 over everything before it.
@@ -27,10 +29,11 @@ void config_defaults(device_config_t *config);
 size_t config_encode(const device_config_t *config, uint8_t *record, size_t size);
 
 // Returns false (and leaves `config` untouched) for erased flash, an unknown version or a bad CRC.
-// Version 1 records (before layout_rotation) are read with layout_rotation = 0.
+// Version 1 records (before layout_rotation) are read with layout_rotation = 0, and version 1 and 2
+// records (before publish_squares) with publish_squares = 1.
 bool config_decode(const uint8_t *record, size_t size, device_config_t *config);
 
 // Sets one field by name: wifi_ssid, wifi_password, mqtt_host, mqtt_port, mqtt_user, mqtt_password,
-// layout_rotation. Returns false for an unknown key, a value that doesn't fit, a port outside 1..65535
-// or a rotation other than 0/90/180/270.
+// layout_rotation, publish_squares. Returns false for an unknown key, a value that doesn't fit, a port
+// outside 1..65535, a rotation other than 0/90/180/270 or publish_squares other than 0/1.
 bool config_set_field(device_config_t *config, const char *key, const char *value);

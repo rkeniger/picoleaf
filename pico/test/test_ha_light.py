@@ -60,6 +60,8 @@ def lib(build_host_library):
     library.ha_light_command_transition_ms.restype = ctypes.c_bool
     library.ha_rotation_discovery_json.argtypes = [ctypes.c_char_p] * 6 + [ctypes.c_size_t]
     library.ha_rotation_discovery_json.restype = ctypes.c_size_t
+    library.ha_publish_squares_discovery_json.argtypes = [ctypes.c_char_p] * 6 + [ctypes.c_size_t]
+    library.ha_publish_squares_discovery_json.restype = ctypes.c_size_t
     library.ha_light_state_json.restype = ctypes.c_size_t
     library.ha_light_output.argtypes = [ctypes.POINTER(LightState), ctypes.POINTER(ctypes.c_uint8)]
     library.ha_light_discovery_json.argtypes = [ctypes.POINTER(Discovery), ctypes.c_char_p, ctypes.c_size_t]
@@ -267,3 +269,11 @@ def test_rotation_select_discovery(lib):
     length = lib.ha_rotation_discovery_json(b"uid", b"cmd", b"state", b"avail", b"dev", buffer, len(buffer))
     payload = json.loads(buffer.value)
     assert length > 0 and payload["options"] == ["0", "90", "180", "270"] and payload["entity_category"] == "config"
+
+
+def test_publish_squares_switch_discovery(lib):
+    buffer = ctypes.create_string_buffer(512)
+    length = lib.ha_publish_squares_discovery_json(b"uid", b"cmd", b"state", b"avail", b"dev", buffer, len(buffer))
+    payload = json.loads(buffer.value)
+    assert length > 0 and payload["entity_category"] == "config"
+    assert (payload["payload_on"], payload["payload_off"], payload["command_topic"]) == ("ON", "OFF", "cmd")
