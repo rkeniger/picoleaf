@@ -9,6 +9,7 @@ from canvasbus import (
     nearest_standard_baud,
     parse_capture,
     parse_hex_bytes,
+    poll_changes,
     provision_commands,
     rainbow_frame,
     stress_failures,
@@ -201,3 +202,14 @@ def test_provision_commands_hex_encode_values_in_firmware_order():
 def test_provision_rejects_unknown_settings():
     with pytest.raises(ValueError, match="unknown settings"):
         provision_commands({"wifi_ssdi": "typo"})
+
+
+def test_poll_changes_names_each_changed_square():
+    previous = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    assert poll_changes(previous, [0x00, 0x00, 0x11, 0x00, 0x00, 0x00]) == ["square 1: 11 00 (was 00 00)"]
+    assert poll_changes(previous, previous) == []
+
+
+def test_poll_changes_ignores_first_reply_and_length_changes():
+    assert poll_changes(None, [0x10, 0x00]) == []
+    assert poll_changes([0x00, 0x00], [0x00, 0x00, 0x00, 0x00]) == []

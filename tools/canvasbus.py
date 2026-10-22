@@ -352,6 +352,77 @@ def read_layout(probe: Probe, rotate_degrees: int) -> None:
         print(f"\nwarning: poll returned {len(poll)} bytes, expected {2 * len(parsed.squares)} for this many squares")
 
 
+def reply_bytes(probe: Probe, payload: list[int], listen_ms: int) -> list[int]:
+    """Sends one frame through `tx` (which pauses the controller) and returns the panels' reply bytes."""
+    _, captures = probe.command(tx_line(listen_ms, payload, allow_dangerous=False))
+    return [byte.value for byte in split_directions(captures[0])[1]]
+
+
+def poll_changes(previous: list[int] | None, reply: list[int]) -> list[str]:
+    """One description per square whose 2-byte poll entry differs from the previous reply."""
+    if previous is None or len(previous) != len(reply):
+        return []
+    changes = []
+    for square in range(len(reply) // 2):
+        before, after = previous[2 * square : 2 * square + 2], reply[2 * square : 2 * square + 2]
+        if before != after:
+            changes.append(f"square {square}: {after[0]:02X} {after[1]:02X} (was {before[0]:02X} {before[1]:02X})")
+    return changes
+
+
+# Squares drop the session after ~480 ms without a poll; this leaves room for USB round trips.
+TOUCH_POLL_INTERVAL_S = 0.1
+
+
+def run_touch(probe: Probe, seconds: float, enable: bool, label: str | None) -> pathlib.Path:
+    """Polls the squares itself, optionally with touch switched on, and logs every poll reply.
+
+    Prints a line whenever a square's entry changes, so taps can be matched to bytes. Touch is left on
+    afterwards, since the firmware relies on it for tap events, and the controller resumes. Square
+    numbers are in reply order, which may not be bus order.
+    """
+    reply_bytes(probe, [0x00], 20)
+    layout = reply_bytes(probe, [0x80], 150)
+    squares = len(parse_layout(layout).squares)
+    print(f"session open, {squares} squares; touch {'on (FC 07 01)' if enable else 'left as it was'}")
+    if enable:
+        reply_bytes(probe, [0xFC, 0x07, 0x01], 5)
+    polls: list[tuple[float, str]] = []
+    previous: list[int] | None = None
+    started = time.monotonic()
+    print(f"polling for {seconds:g} s; tap, hold and swipe squares now (Ctrl-C to stop early)")
+    try:
+        while time.monotonic() - started < seconds:
+            reply = reply_bytes(probe, [0xC0], 10)
+            elapsed = time.monotonic() - started
+            polls.append((round(elapsed * 1000), bytes(reply).hex().upper()))
+            if len(reply) != 2 * squares:
+                print(f"{elapsed:8.2f} s  poll returned {len(reply)} bytes, expected {2 * squares}")
+            for change in poll_changes(previous, reply):
+                print(f"{elapsed:8.2f} s  {change}")
+            previous = reply
+            time.sleep(max(0.0, TOUCH_POLL_INTERVAL_S - (time.monotonic() - started - elapsed)))
+    except KeyboardInterrupt:
+        print("stopped")
+    finally:
+        probe.command("ctl on")
+    CAPTURE_DIR.mkdir(exist_ok=True)
+    stamp = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    path = unused_capture_path(CAPTURE_DIR, f"{stamp}-touch-{label}" if label else f"{stamp}-touch")
+    log = {
+        "command": "touch",
+        "label": label,
+        "created": stamp,
+        "touch_enabled": enable,
+        "layout": bytes(layout).hex().upper(),
+        "squares": squares,
+        "polls": polls,
+    }
+    path.write_text(json.dumps(log, indent=1))
+    print(f"saved {path.relative_to(REPO_ROOT)}: {len(polls)} polls")
+    return path
+
+
 # Base-scope criteria (docs/scope.md): colour updates at >= 20 Hz without dropouts.
 MIN_FRAME_RATE_HZ = 20
 # The squares drop the session after ~480 ms without a poll; the controller polls every 40 ms.
@@ -502,6 +573,11 @@ def main() -> None:
     seq.add_argument("--label", help="prefix for the saved capture files")
     seq.add_argument("--allow-dangerous", action="store_true")
 
+    touch = commands.add_parser("touch", help="poll the squares with touch switched on and log what changes")
+    touch.add_argument("--seconds", type=float, default=60)
+    touch.add_argument("--no-enable", action="store_true", help="don't send FC 07 01 (a baseline run)")
+    touch.add_argument("--label", help="suffix for the saved log file")
+
     decode = commands.add_parser("decode", help="decode a saved capture")
     decode.add_argument("file", type=pathlib.Path)
     decode.add_argument("--baud", type=int)
@@ -528,6 +604,10 @@ def main() -> None:
 
     if args.action == "layout":
         read_layout(Probe(args.port), args.rotate)
+        return
+
+    if args.action == "touch":
+        run_touch(Probe(args.port), args.seconds, not args.no_enable, args.label)
         return
 
     if args.action == "seq":
