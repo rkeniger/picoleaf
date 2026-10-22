@@ -9,7 +9,7 @@ A Nanoleaf Canvas (model NL29) is a wall of touch-sensitive light squares. They 
 
 PicoLeaf is a replacement brain. A Raspberry Pi Pico W, wired into one square through a single resistor, finds every square on the wall, drives each one's colour 25 times a second, and announces itself to Home Assistant over MQTT. The protocol was worked out from scratch on the bench with the Pico as its own logic analyser; every claim in [`docs/`](docs/) carries the capture it came from.
 
-Running a 13-square wall since 2026-09-14. Firmware 0.10.0.
+Running a 13-square wall since 2026-09-14. Firmware 0.10.1.
 
 ## What it does
 

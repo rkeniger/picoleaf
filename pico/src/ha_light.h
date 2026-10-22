@@ -23,10 +23,9 @@ typedef struct {
 #define LIGHT_WARM_KELVIN 2700
 #define LIGHT_COOL_KELVIN 6500
 
-// After power-up: the warm end of the range at 80% brightness.
-#define LIGHT_DEFAULT_STATE                                                                                  \
-    ((light_state_t){.on = true, .brightness = 204, .red = 0x90, .green = 0x30, .blue = 0x00, .white = 0xFF, \
-                     .kelvin = LIGHT_WARM_KELVIN})
+// After power-up: RGBW (255, 127, 0, 128) at 80% brightness.
+#define LIGHT_DEFAULT_STATE \
+    ((light_state_t){.on = true, .brightness = 204, .red = 255, .green = 127, .blue = 0, .white = 128})
 
 // Applies a command such as {"state":"ON","brightness":80,"color":{"r":255,"g":0,"b":0,"w":0}} or
 // {"color_temp":3000} (kelvin, clamped to the range above). Absent fields keep their value, except
