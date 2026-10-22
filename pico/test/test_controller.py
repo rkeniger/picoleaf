@@ -86,6 +86,8 @@ def library(build_host_library):
     lib.controller_uid.restype = ctypes.POINTER(ctypes.c_uint8)
     lib.controller_count_squares.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
     lib.controller_count_squares.restype = ctypes.c_size_t
+    lib.controller_poll_is_odd.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+    lib.controller_poll_is_odd.restype = ctypes.c_bool
     return lib
 
 
@@ -216,3 +218,29 @@ def test_reads_ids_when_hop_count_differs_from_index(library):
     open_and_read_ids(controller, panels)
     assert controller.uid(5) == bench_uid(5)
     assert controller.uid(12) == bench_uid(12)
+
+
+@pytest.mark.parametrize(
+    ("reply", "odd"),
+    [
+        ("00 00 00 00", False),
+        ("10 00 11 00 12 00 20 00", False),  # first bytes seen varying, possibly touch
+        ("", False),
+        ("CC 00", True),
+        ("00 CC", True),
+        ("00 00 30 00", True),
+    ],
+)
+def test_classifies_odd_poll_replies(library, reply, odd):
+    data = bytes.fromhex(reply)
+    assert library.controller_poll_is_odd(data, len(data)) is odd
+
+
+def test_odd_poll_of_the_right_length_keeps_the_session(library):
+    # Odd replies are only recorded for the diagnostics; whether they mean a stuck square is not known yet.
+    panels = FakePanels(TWO_SQUARES)
+    controller = Controller(library, panels)
+    open_and_read_ids(controller, panels)
+    panels.poll_reply = [0x00, 0x00, 0xCC, 0x00]
+    assert controller.tick(10 * TICK_US) == IDLE
+    assert panels.frames.count([0x80]) == 1

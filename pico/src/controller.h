@@ -12,6 +12,7 @@
 #define CONTROLLER_LAYOUT_MAX 512
 #define CONTROLLER_UID_LENGTH 16
 #define CONTROLLER_TICK_US 40000u  // 25 Hz colour frames and polls
+#define CONTROLLER_ODD_POLL_MAX 32  // bytes kept of the last odd poll reply
 
 // Sends `length` bytes, records for `listen_ms` afterwards, and returns how many
 // reply bytes (after our own frame) were written to `reply`.
@@ -37,6 +38,11 @@ typedef struct {
     // Reply length of the poll that last ended a session (0 = silence, 1 = CC).
     uint32_t last_bad_poll_length;
     uint32_t uid_read_failures;
+    // Poll replies of the right length but unusual content (see controller_poll_is_odd), and the last one.
+    uint32_t odd_polls;
+    uint8_t last_odd_poll[CONTROLLER_ODD_POLL_MAX];
+    uint32_t last_odd_poll_length;
+    uint64_t last_odd_poll_us;
 } controller_stats_t;
 
 typedef struct {
@@ -82,3 +88,7 @@ size_t controller_count_squares(const uint8_t *layout, size_t length);
 
 // `E0 01` followed by one `05 00 R G B W` entry per square, farthest square first.
 size_t controller_colour_frame(const controller_t *controller, uint8_t *frame, size_t max);
+
+// True if a poll reply (2 bytes per square) holds anything but the usual pairs: a CC byte anywhere,
+// or a pair whose first byte is not 00, 10, 11, 12 or 20 (seen varying, possibly touch).
+bool controller_poll_is_odd(const uint8_t *reply, size_t length);

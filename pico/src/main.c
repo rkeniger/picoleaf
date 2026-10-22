@@ -29,7 +29,7 @@
 #include "net.h"
 #include "uart_decode.h"
 
-#define FIRMWARE_VERSION "0.8.0"
+#define FIRMWARE_VERSION "0.9.0"
 
 // GP2 is header pin 4, next to GND on pin 3.
 #define BUS_PIN 2
@@ -71,6 +71,8 @@ static controller_t controller;
 static device_config_t device_config;
 static bool wifi_chip_ready;  // also drives the board LED
 static bool network_ready;
+// The longest main-loop pass since boot (or `stats reset`), not counting USB command handling.
+static uint64_t longest_loop_us;
 
 static uint32_t capture_buffer[CAPTURE_WORDS];
 static uint32_t tx_words[MAX_TX_BYTES];
@@ -501,18 +503,24 @@ static bool handle_controller_command(const char *command, char *save) {
         char *action = strtok_r(NULL, " \t", &save);
         if (action && strcmp(action, "reset") == 0) {
             memset(&controller.stats, 0, sizeof controller.stats);
+            longest_loop_us = 0;
         } else {
             const controller_stats_t *stats = &controller.stats;
             printf("STATS enabled=%d session=%d squares=%u sessions_opened=%lu session_failures=%lu sessions_lost=%lu "
                    "frames_sent=%lu polls_ok=%lu max_poll_gap_us=%llu last_bad_poll_length=%lu uids_read=%u "
-                   "uid_read_failures=%lu uptime_us=%llu\n",
+                   "uid_read_failures=%lu odd_polls=%lu max_loop_us=%llu uptime_us=%llu\n",
                    controller.enabled, controller.in_session, (unsigned)controller.square_count,
                    (unsigned long)stats->sessions_opened, (unsigned long)stats->session_failures,
                    (unsigned long)stats->sessions_lost, (unsigned long)stats->frames_sent,
                    (unsigned long)stats->polls_ok, (unsigned long long)stats->max_poll_gap_us,
                    (unsigned long)stats->last_bad_poll_length, (unsigned)controller.uids_read,
-                   (unsigned long)stats->uid_read_failures,
-                   (unsigned long long)time_us_64());
+                   (unsigned long)stats->uid_read_failures, (unsigned long)stats->odd_polls,
+                   (unsigned long long)longest_loop_us, (unsigned long long)time_us_64());
+            if (stats->odd_polls > 0) {
+                printf("STATS last_odd_poll=");
+                for (uint32_t i = 0; i < stats->last_odd_poll_length; i++) printf("%02X", stats->last_odd_poll[i]);
+                printf(" at_uptime_us=%llu\n", (unsigned long long)stats->last_odd_poll_us);
+            }
         }
     } else if (strcmp(command, "layout") == 0) {
         printf("LAYOUT squares=%u bytes=", (unsigned)controller.square_count);
@@ -659,7 +667,9 @@ int main(void) {
         update_panel_led(event, now_us);
         home_assistant_on_controller_event(event, now_us);
         if (network_ready) net_poll(now_us);
-        home_assistant_poll(now_us);
+        home_assistant_poll(now_us, longest_loop_us);
+        uint64_t pass_us = time_us_64() - now_us;
+        if (pass_us > longest_loop_us) longest_loop_us = pass_us;
 
         int c = getchar_timeout_us(0);
         if (c == PICO_ERROR_TIMEOUT) {

@@ -27,6 +27,7 @@ Host: a Raspberry Pi (`<pi-host>`, Debian 13, Docker 29). The Home Assistant fro
 | `light.nanoleaf_canvas_wall` | Every square at once, plus effects. Commands apply to each square's own state, so dimming the wall keeps per-square colours unless a colour is sent too |
 | `light.nanoleaf_canvas_tile_0` … `_12` | One square each: on/off, brightness, RGBW colour or colour temperature |
 | `select.nanoleaf_canvas_layout_rotation` | How the wall hangs relative to square 0: `0`, `90`, `180`, `270` (clockwise). Only affects effects that depend on position. Saved on the Pico. This wall: `180` |
+| `sensor.nanoleaf_canvas_*` (diagnostic) | Seven counters since boot, from firmware 0.9.0: uptime, longest poll gap, longest main-loop pass, sessions lost, MQTT reconnects, squares on the bus, odd poll replies (with the last odd reply's bytes and uptime as attributes). For tracking down squares that stop responding: a square drops its session after ~480 ms without a poll |
 
 "Tile N" uses the square's bus order at the time it was first discovered (0 = the square the Pico is plugged into; see [panel-bus.md](panel-bus.md#layout-encoding) for how order follows the layout). The **unique ID comes from each square's 16-byte hardware ID**, so moving squares around keeps the same entity, state and automations. Rename entities in Home Assistant if the numbers stop matching the wall.
 
@@ -71,6 +72,8 @@ Selected on `light.nanoleaf_canvas_wall` (effect dropdown, scenes, automations).
 | `canvas/<board>/status` | Pico → HA, retained | `online`; `offline` as the last will |
 | `homeassistant/select/canvas_<board>/layout_rotation/config` | Pico → HA, retained | Select discovery, options `0 90 180 270` |
 | `canvas/<board>/layout_rotation/set` / `state` | HA → Pico / Pico → HA (retained) | `0`, `90`, `180` or `270` |
+| `homeassistant/sensor/canvas_<board>/<sensor>/config` | Pico → HA, retained | Diagnostic sensor discovery, `entity_category: diagnostic`, unique ID `canvas_<board>_sensor_<sensor>` |
+| `canvas/<board>/diagnostics` | Pico → HA, **not** retained | `{"uptime_s":..,"longest_poll_gap_ms":..,"longest_loop_ms":..,"sessions_lost":..,"mqtt_reconnects":..,"squares":..,"odd_polls":..,"last_odd_poll":"<hex>","last_odd_poll_uptime_s":..}` every 60 s and at once when a session is lost. Not retained, because old counters would read as current after a reboot. A poll reply is odd if it has the right length but contains `CC` or a square's first byte isn't `00`, `10`, `11`, `12` or `20` |
 
 ## Broker setup on the server
 
@@ -130,7 +133,7 @@ To check from USB: `send cfg show` (passwords shown only as `set`/`unset`) and `
 | Power-up | Controller opens the session and reads hardware IDs (~0.5 s for 13 squares); Wi-Fi joins and MQTT connects within ~5 s; discovery and state are republished |
 | Broker restart | Notices the disconnect, clears its ARP cache, reconnects after 5 s, republishes everything |
 | Wi-Fi loss | Rejoins, then reconnects MQTT |
-| After (re)connecting | Publishes the 28 discovery/state messages one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
+| After (re)connecting | Publishes the discovery, state and diagnostics messages (38 for 13 squares) one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
 | Probe commands over USB (`tx`, `cap`, …) | Pause the controller; `ctl on` resumes |
 
 ## Verification (2026-09-14)

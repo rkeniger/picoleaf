@@ -6,6 +6,7 @@
 
 #include "config_flash.h"
 #include "connection_watch.h"
+#include "diagnostics.h"
 #include "effects.h"
 #include "ha_light.h"
 #include "layout.h"
@@ -21,6 +22,7 @@
 #define BOOT_SHIMMER_US 5000000u
 #define CONNECTED_BLINK_TIMES 1u
 #define PROBLEM_BLINK_TIMES 3u
+#define DIAGNOSTICS_INTERVAL_US 60000000u
 
 static const uint8_t CONNECTED_BLINK_COLOUR[4] = {0xFF, 0xFF, 0xFF, 0x00};
 static const uint8_t PROBLEM_BLINK_COLOUR[4] = {0xFF, 0x00, 0x00, 0x00};
@@ -55,6 +57,11 @@ static struct {
     bool wall_state_pending;
     bool rotation_discovery_pending;
     bool rotation_state_pending;
+    uint32_t sensor_discovery_pending;  // one bit per diagnostics sensor
+    bool diagnostics_pending;
+    uint64_t next_diagnostics_us;
+    uint32_t diagnostics_sessions_lost;  // as last published; a new loss is published at once
+    uint64_t longest_loop_us;
     renderer_t renderer;
     uint64_t next_render_us;
     uint32_t published_for_connection;
@@ -126,6 +133,8 @@ static void apply_layout_rotation(void) {
 static void mark_everything_pending(void) {
     ha.wall_discovery_pending = ha.wall_state_pending = true;
     ha.rotation_discovery_pending = ha.rotation_state_pending = true;
+    ha.sensor_discovery_pending = (1u << diagnostics_sensor_count()) - 1u;
+    ha.diagnostics_pending = true;
     for (size_t index = 0; index < ha.index_count; index++) {
         if (ha.by_index[index] < 0) continue;
         ha.known[ha.by_index[index]].discovery_pending = true;
@@ -300,6 +309,45 @@ static bool publish_rotation_discovery(void) {
     return net_publish(topic, payload, true);
 }
 
+static bool publish_sensor_discovery(size_t index) {
+    char topic[TOPIC_MAX], state_topic[TOPIC_MAX], unique_id[TOPIC_MAX];
+    static char payload[768];  // static: keeps it off the 4 KB main stack
+    const char *id = diagnostics_sensor_id(index);
+    snprintf(topic, sizeof topic, "homeassistant/sensor/%s/%s/config", ha.client_id, id);
+    snprintf(state_topic, sizeof state_topic, "%s/diagnostics", ha.base_topic);
+    snprintf(unique_id, sizeof unique_id, "%s_sensor_%s", ha.client_id, id);
+    if (diagnostics_discovery_json(index, unique_id, state_topic, ha.availability_topic, ha.client_id, payload,
+                                   sizeof payload) == 0) {
+        return false;
+    }
+    return net_publish(topic, payload, true);
+}
+
+static bool publish_diagnostics(uint64_t now_us) {
+    const controller_stats_t *stats = &ha.controller->stats;
+    diagnostics_t diagnostics = {
+        .uptime_us = now_us,
+        .longest_poll_gap_us = stats->max_poll_gap_us,
+        .longest_loop_us = ha.longest_loop_us,
+        .sessions_lost = stats->sessions_lost,
+        .mqtt_reconnects = net_connection_count() > 0 ? net_connection_count() - 1 : 0,
+        .squares = (uint32_t)ha.controller->square_count,
+        .odd_polls = stats->odd_polls,
+        .last_odd_poll_length = stats->last_odd_poll_length,
+        .last_odd_poll_us = stats->last_odd_poll_us,
+    };
+    memcpy(diagnostics.last_odd_poll, stats->last_odd_poll, sizeof diagnostics.last_odd_poll);
+    char topic[TOPIC_MAX];
+    static char payload[320];  // static: keeps it off the 4 KB main stack
+    snprintf(topic, sizeof topic, "%s/diagnostics", ha.base_topic);
+    if (diagnostics_json(&diagnostics, payload, sizeof payload) == 0) return false;
+    // Not retained: after a reboot, old counters would read as current.
+    if (!net_publish(topic, payload, false)) return false;
+    ha.diagnostics_sessions_lost = diagnostics.sessions_lost;
+    ha.next_diagnostics_us = now_us + DIAGNOSTICS_INTERVAL_US;
+    return true;
+}
+
 static bool publish_rotation_state(void) {
     char topic[TOPIC_MAX], payload[8];
     snprintf(topic, sizeof topic, "%s/layout_rotation/state", ha.base_topic);
@@ -308,7 +356,7 @@ static bool publish_rotation_state(void) {
 }
 
 // Publishes the next pending message, if any. Returns false when nothing was attempted.
-static bool publish_next(void) {
+static bool publish_next(uint64_t now_us) {
     if (ha.wall_discovery_pending) {
         // Home Assistant prefixes the device name ("Nanoleaf Canvas"), so keep entity names short.
         ha.wall_discovery_pending = !publish_light_discovery("wall", "Wall", true);
@@ -326,6 +374,12 @@ static bool publish_next(void) {
         ha.rotation_state_pending = !publish_rotation_state();
         return true;
     }
+    for (size_t index = 0; index < diagnostics_sensor_count(); index++) {
+        if (ha.sensor_discovery_pending & (1u << index)) {
+            if (publish_sensor_discovery(index)) ha.sensor_discovery_pending &= ~(1u << index);
+            return true;
+        }
+    }
     for (size_t index = 0; index < ha.index_count; index++) {
         if (ha.by_index[index] < 0) continue;
         square_t *square = &ha.known[ha.by_index[index]];
@@ -339,6 +393,10 @@ static bool publish_next(void) {
             square->state_pending = !publish_light_state(square->uid_hex, &square->state, NULL);
             return true;
         }
+    }
+    if (ha.diagnostics_pending) {
+        ha.diagnostics_pending = !publish_diagnostics(now_us);
+        return true;
     }
     return false;
 }
@@ -356,14 +414,18 @@ static void signal_connection(uint64_t now_us) {
     ha.owed_signal = CONNECTION_SIGNAL_NONE;
 }
 
-void home_assistant_poll(uint64_t now_us) {
+void home_assistant_poll(uint64_t now_us, uint64_t longest_loop_us) {
+    ha.longest_loop_us = longest_loop_us;
     signal_connection(now_us);
     if (!net_mqtt_connected()) return;
     if (ha.published_for_connection != net_connection_count()) {
         ha.published_for_connection = net_connection_count();
         mark_everything_pending();
     }
+    if (now_us >= ha.next_diagnostics_us || ha.controller->stats.sessions_lost != ha.diagnostics_sessions_lost) {
+        ha.diagnostics_pending = true;
+    }
     // A failed publish stays pending and is retried at the next interval.
     if (now_us < ha.next_publish_us) return;
-    if (publish_next()) ha.next_publish_us = now_us + PUBLISH_INTERVAL_US;
+    if (publish_next(now_us)) ha.next_publish_us = now_us + PUBLISH_INTERVAL_US;
 }

@@ -34,6 +34,17 @@ uint16_t controller_crc16_arc(const uint8_t *data, size_t length) {
     return crc;
 }
 
+bool controller_poll_is_odd(const uint8_t *reply, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        if (reply[i] == 0xCC) return true;
+        if (i % 2 == 0 && reply[i] != 0x00 && reply[i] != 0x10 && reply[i] != 0x11 && reply[i] != 0x12 &&
+            reply[i] != 0x20) {
+            return true;
+        }
+    }
+    return false;
+}
+
 size_t controller_count_squares(const uint8_t *layout, size_t length) {
     size_t squares = 0;
     for (size_t i = 0; i < length; i++) {
@@ -171,5 +182,13 @@ controller_event_t controller_tick(controller_t *controller, uint64_t now_us, co
     if (gap > controller->stats.max_poll_gap_us) controller->stats.max_poll_gap_us = gap;
     controller->last_good_poll_us = now_us;
     controller->stats.polls_ok++;
+    if (controller_poll_is_odd(reply, poll_length)) {
+        controller_stats_t *stats = &controller->stats;
+        stats->odd_polls++;
+        stats->last_odd_poll_length =
+            (uint32_t)(poll_length < CONTROLLER_ODD_POLL_MAX ? poll_length : CONTROLLER_ODD_POLL_MAX);
+        memcpy(stats->last_odd_poll, reply, stats->last_odd_poll_length);
+        stats->last_odd_poll_us = now_us;
+    }
     return uids_completed ? CONTROLLER_UIDS_READY : CONTROLLER_IDLE;
 }

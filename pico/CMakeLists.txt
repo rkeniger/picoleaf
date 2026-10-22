@@ -20,6 +20,7 @@ add_executable(canvas_probe
     src/home_assistant.c
     src/config_record.c
     src/config_flash.c
+    src/diagnostics.c
     src/net.c
 )
 target_include_directories(canvas_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)  # lwipopts.h

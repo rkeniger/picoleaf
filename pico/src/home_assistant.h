@@ -1,15 +1,17 @@
 #pragma once
 
-// Publishes the wall and each square as Home Assistant MQTT lights, plus a layout-rotation
-// select, and turns their commands into fades and effects on the controller. Squares are
-// identified by hardware ID, so re-arranging them keeps Home Assistant entities and state.
+// Publishes the wall and each square as Home Assistant MQTT lights, plus a layout-rotation select
+// and diagnostic sensors, and turns their commands into fades and effects on the controller. Squares
+// are identified by hardware ID, so re-arranging them keeps Home Assistant entities and state.
 //
 // Topics, with <device> = canvas_<board id>:
 //   homeassistant/light/<device>/<wall|square id>/config      light discovery (retained)
 //   homeassistant/select/<device>/layout_rotation/config      rotation select discovery (retained)
+//   homeassistant/sensor/<device>/<sensor id>/config           diagnostics sensor discovery (retained)
 //   canvas/<board id>/<wall|square id|layout_rotation>/set     commands from HA
 //   canvas/<board id>/<wall|square id|layout_rotation>/state   state (retained)
 //   canvas/<board id>/status                                    online / offline (last will)
+//   canvas/<board id>/diagnostics                               counters, every 60 s and on session loss
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +35,7 @@ void home_assistant_on_controller_event(controller_event_t event, uint64_t now_u
 // Computes the next frame (fade or effect) and hands it to the controller, at the controller's rate.
 void home_assistant_render(uint64_t now_us);
 
-// Blinks the wall for MQTT connection changes and publishes pending discovery and state messages, one
-// at a time. Call every main-loop pass, also when the network couldn't be started, so that shows as a problem.
-void home_assistant_poll(uint64_t now_us);
+// Blinks the wall for MQTT connection changes and publishes pending discovery, state and diagnostics
+// messages, one at a time. Call every main-loop pass, also when the network couldn't be started, so that
+// shows as a problem. `longest_loop_us` is the longest main-loop pass since boot, for the diagnostics.
+void home_assistant_poll(uint64_t now_us, uint64_t longest_loop_us);
