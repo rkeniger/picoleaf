@@ -15,7 +15,7 @@ Mosquitto (container homeassist-mosquitto-1)
    <broker-lan-ip> on macVlanNet (LAN)         ← Pico W, user "canvas"
         ▲
         │  Wi-Fi, MQTT
-Pico W (LAN, DHCP) ── GP2 → 330 Ω → square DATA ── 13 squares
+Pico W (LAN, DHCP) ── GP2 → 330 Ω → square DATA ── 23 squares
 ```
 
 Host: a Raspberry Pi (`<pi-host>`, Debian 13, Docker 29). The Home Assistant frontend is served by nginx.
@@ -25,7 +25,7 @@ Host: a Raspberry Pi (`<pi-host>`, Debian 13, Docker 29). The Home Assistant fro
 | Entity | Controls |
 |---|---|
 | `light.nanoleaf_canvas_wall` | Every square at once, plus effects. Commands apply to each square's own state, so dimming the wall keeps per-square colours unless a colour is sent too |
-| `light.nanoleaf_canvas_tile_0` … `_12` | One square each: on/off, brightness, RGBW colour or colour temperature |
+| `light.nanoleaf_canvas_tile_0` … `_22` | One square each: on/off, brightness, RGBW colour or colour temperature |
 | `select.nanoleaf_canvas_layout_rotation` | How the wall hangs relative to square 0: `0`, `90`, `180`, `270` (clockwise). Only affects effects that depend on position. Saved on the Pico. This wall: `180` |
 | `switch.nanoleaf_canvas_publish_squares` | Whether each square gets its own light (firmware 0.10.0). Off: only the wall light is published, and the squares' retained discovery and state messages are deleted from the broker, so the tile entities disappear. Saved on the Pico; on by default |
 | `sensor.nanoleaf_canvas_*` (diagnostic) | Seven counters since boot, from firmware 0.9.0: uptime, longest poll gap, longest main-loop pass, sessions lost, MQTT reconnects, squares on the bus, odd poll replies (with the last odd reply's bytes and uptime as attributes). For tracking down squares that stop responding: a square drops its session after ~480 ms without a poll |
@@ -136,7 +136,7 @@ To check from USB: `send cfg show` (passwords shown only as `set`/`unset`) and `
 | Power-up | Controller opens the session and reads hardware IDs (~0.5 s for 13 squares); Wi-Fi joins and MQTT connects within ~5 s; discovery and state are republished |
 | Broker restart | Notices the disconnect, clears its ARP cache, reconnects after 5 s, republishes everything |
 | Wi-Fi loss | Rejoins, then reconnects MQTT |
-| After (re)connecting | Publishes the discovery, state and diagnostics messages (40 for 13 squares, 14 with the squares not published) one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
+| After (re)connecting | Publishes the discovery, state and diagnostics messages (60 for the 23-square wall, 14 with the squares not published) one every 25 ms. Sending them in one burst exhausted lwIP's memory and stalled the connection until the broker's keep-alive timeout |
 | Probe commands over USB (`tx`, `cap`, …) | Pause the controller; `ctl on` resumes |
 
 ## Verification (2026-09-14)
